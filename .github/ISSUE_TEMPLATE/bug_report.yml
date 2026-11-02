@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Do not paste credentials, cookies or private campaign exports.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Plugin, Payload, UI and Node versions
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include configuration, steps and your database adapter. Use example.com and synthetic values.
+    validations:
+      required: true
