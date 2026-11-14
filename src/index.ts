@@ -1,5 +1,10 @@
-import type { CollectionConfig, Field, Plugin } from "payload";
+import type { CollectionConfig, Config, Field, Plugin } from "payload";
+import type { PersonalizationOptions } from "./personalization/collection.js";
 import { csvEndpoint } from "./csv-endpoint.js";
+import {
+  addPersonalizationToBlocks,
+  audiencesCollection,
+} from "./personalization/collection.js";
 import type { UtmPluginOptions } from "./types.js";
 import {
   buildUtmUrl,
@@ -17,6 +22,11 @@ export {
   validateDestination,
 } from "./utilities.js";
 export type { UtmInput, UtmKey, UtmUrlOptions } from "./utilities.js";
+export {
+  personalizationField,
+  type PersonalizationOptions,
+} from "./personalization/collection.js";
+export * from "./personalization/match.js";
 export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
   return (config) => {
     if (options.enabled === false) return config;
@@ -270,9 +280,63 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
         ],
       },
     };
-    return {
+    const result: Config = {
       ...config,
       collections: [...(config.collections ?? []), collection],
     };
+    return options.personalization
+      ? withPersonalization(result, options.personalization)
+      : result;
   };
+}
+function withPersonalization(
+  config: Config,
+  options: PersonalizationOptions,
+): Config {
+  const slug = options.audiencesSlug ?? "utm-audiences";
+  if (!/^[a-z][a-z0-9-]*$/.test(slug))
+    throw new Error(
+      "utmPlugin: personalization.audiencesSlug must contain lowercase letters, digits and hyphens.",
+    );
+  if (config.collections?.some((collection) => collection.slug === slug))
+    throw new Error(`utmPlugin: collection "${slug}" already exists.`);
+  const blocks = options.blocks ?? [];
+  if (
+    blocks !== "all" &&
+    (!Array.isArray(blocks) ||
+      blocks.some((block) => typeof block !== "string" || !block))
+  )
+    throw new Error(
+      "utmPlugin: personalization.blocks must be 'all' or a list of block slugs.",
+    );
+  const manifest = options.manifest ?? {};
+  if (
+    manifest.secret !== undefined &&
+    (typeof manifest.secret !== "string" || manifest.secret.length < 16)
+  )
+    throw new Error(
+      "utmPlugin: personalization.manifest.secret must be at least 16 characters.",
+    );
+  if (
+    manifest.limit !== undefined &&
+    (!Number.isInteger(manifest.limit) ||
+      manifest.limit < 1 ||
+      manifest.limit > 5000)
+  )
+    throw new Error(
+      "utmPlugin: personalization.manifest.limit must be an integer between 1 and 5000.",
+    );
+  let audiences = audiencesCollection(slug, options);
+  if (options.overrides) audiences = options.overrides(audiences);
+  if (audiences.slug !== slug)
+    throw new Error(
+      "utmPlugin: change the audiences slug with personalization.audiencesSlug, not overrides.",
+    );
+  const withCollection: Config = {
+    ...config,
+    collections: [...(config.collections ?? []), audiences],
+  };
+  return blocks === "all" || blocks.length
+    ? addPersonalizationToBlocks(withCollection, blocks, slug)
+    : withCollection;
 }
