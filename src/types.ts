@@ -1,4 +1,5 @@
 import type { CollectionConfig, CollectionSlug } from "payload";
+import type { PersonalizationOptions } from "./personalization/collection.js";
 import type { UtmUrlOptions } from "./utilities.js";
 export type UtmPreset = {
   label: string;
@@ -16,4 +17,6 @@ export type UtmPluginOptions = UtmUrlOptions & {
   /** Export cap, 1–10000; default 1000. */
   csvExport?: false | { maxRows?: number };
   overrides?: (collection: CollectionConfig) => CollectionConfig;
+  /** Opt-in: campaign audiences and block-level content personalization. */
+  personalization?: PersonalizationOptions;
 };

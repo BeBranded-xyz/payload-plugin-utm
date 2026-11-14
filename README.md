@@ -2,7 +2,7 @@
 
 Create campaign links where your content already lives: in Payload CMS.
 
-Live URL generation, one-click copy, reusable source/medium presets, a searchable campaign inventory and permission-aware CSV exports. No analytics account, redirect service or external API required.
+Live URL generation, one-click copy, reusable source/medium presets, a searchable campaign inventory, permission-aware CSV exports and opt-in content personalization by campaign audience. No analytics account, redirect service or external API required.
 
 **Community plugin · MIT · Payload 3.92+ · React 19 · Node 22+**
 
@@ -113,6 +113,62 @@ Use your normal authenticated Payload session/API credentials and your app's API
 
 CSV uses UTF-8 with a BOM, CRLF line endings and quoted cells. Values that could be interpreted as spreadsheet formulas are prefixed with an apostrophe. Responses are private and not cached. Archiving organizes the inventory: it does not deactivate links that have already been shared.
 
+## Content personalization (opt-in)
+
+Show different blocks to visitors arriving from a campaign, e.g. a dedicated hero for `utm_source=restaurant-a`. Nothing below is active unless you pass `personalization`.
+
+### 1. Enable it
+
+```ts
+utmPlugin({
+  personalization: {
+    blocks: ['hero', 'cta'], // or 'all'
+  },
+})
+```
+
+This adds **Marketing → Campaign audiences** and a **Personalization** group to the listed blocks, wherever they are used (collections, globals, nested blocks, `config.blocks`).
+
+- An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term` or any other URL parameter (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch and a priority (lower wins). Comparisons ignore case and outer whitespace.
+- A **block** is visible to *everyone* (default), *only these audiences* or *everyone except these audiences*. Typical page: the default hero set to "except Restaurant A" and a second hero set to "only Restaurant A".
+
+`personalizationField()` is exported if you want the same control on array rows or custom places. Run `generate:importmap`, `generate:types` and your migrations as usual.
+
+### 2. Add the middleware
+
+```ts
+// middleware.ts (proxy.ts on Next 16)
+import { createPersonalizationMiddleware } from 'payload-plugin-utm/next'
+
+export const middleware = createPersonalizationMiddleware()
+
+export const config = { matcher: ['/((?!api|admin|_next|.*\\..*).*)'] }
+```
+
+It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). When the URL carries campaign parameters it picks the matching audience (last touch) and remembers it in an `httpOnly` cookie for 30 days; otherwise it reuses that cookie. Only keys that exist in the manifest are ever forwarded.
+
+Options: `manifestUrl` (absolute, for a separate CMS), `loadManifest` (Edge Config, KV, static JSON…), `secret` (paired with `personalization.manifest.secret`), `cacheTtlSeconds`, `cookie: false | { name, maxAgeSeconds }`, `consent: (request) => boolean`, `rewrite`.
+
+### 3. Render
+
+**Dynamic pages** (simplest; the page is rendered per request):
+
+```tsx
+import { filterPersonalizedBlocks, getActiveAudience } from 'payload-plugin-utm/next'
+
+const audience = await getActiveAudience()
+const blocks = filterPersonalizedBlocks(page.layout, audience)
+```
+
+**Static pages**: `createPersonalizationMiddleware({ rewrite: { prefix: 'utm-audience' } })` rewrites `/menu?utm_source=…` to `/utm-audience/<key>/menu`, so each audience variant is cached like any static page. Add a route such as `app/(site)/utm-audience/[audience]/[[...slug]]/page.tsx` that renders the same page with `filterPersonalizedBlocks(page.layout, audienceFromParam(params.audience))`, and emit the public URL as canonical. Visitors without an audience keep the normal route; direct visits to the prefix are redirected (308). In this mode, query with `depth ≥ 1` so audiences are populated with their `key`.
+
+### Measurement, privacy, SEO
+
+- `<PersonalizationTracker audience={key} />` from `payload-plugin-utm/tracker` pushes `{ event: 'utm_personalization', utm_audience }` to `window.dataLayer`. Nothing else is sent anywhere.
+- The cookie stores an audience key only. Depending on your jurisdiction, personalization cookies may require consent: use `consent` or `cookie: false` (the landing URL is still personalized).
+- Crawlers request URLs without UTM parameters and therefore index the default content.
+- The manifest is public by default (it exposes keys and rule values, which already appear in your campaign URLs). Set `personalization.manifest.secret` (≥ 16 chars) to require a bearer token, and `manifest.tenantField` to serve one manifest per tenant via `?tenant=<id>`.
+
 ## Utilities without React or Payload
 
 The `utilities` entry point has no runtime dependencies and can be used in scripts or other frameworks:
@@ -140,7 +196,7 @@ buildUtmVariants(base, [
 
 ## Scope and compatibility
 
-This is a **link-management plugin**, not an attribution platform. It does not record clicks, inject tracking scripts, proxy/shorten URLs, collect visitors, or retrieve GA4 statistics. Direct campaign links work independently of Payload after you copy them. Whether a destination records UTM traffic depends on that site's analytics setup.
+This is a **link-management plugin**, not an attribution platform. It does not record clicks, inject tracking scripts, proxy/shorten URLs, collect visitors, or retrieve GA4 statistics. The opt-in personalization module sets a first-party audience cookie only when you add its middleware. Direct campaign links work independently of Payload after you copy them. Whether a destination records UTM traffic depends on that site's analytics setup.
 
 Tested with Payload/UI 3.92.0 and React 19.2.6. CI tests the package on Node 22 and 24. A Postgres/Next.js consumer build is also verified during initial release validation; broader database/browser compatibility should be verified in your app before rollout. Use Payload and `@payloadcms/ui` versions that match each other.
 
