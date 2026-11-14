@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 — unreleased (0.2.0-beta.1 on npm under the `beta` tag)
+## 0.2.0 — unreleased (0.2.0-beta.2 on npm under the `beta` tag)
+
+0.2.0-beta.2, security: request paths are normalized with a linear scan (the previous regexes could be slowed down by URLs with thousands of slashes, on every request through the middleware); audience token fallbacks are bounded; slug normalization and admin preview links hardened. No API change; upgrade from beta.1 recommended.
 
 0.2.0-beta.1, from the BeBranded site integration: **Pages it changes** on audiences (code mode limits variants without blocks), `rewrite.localePrefixes` (variant segment behind a locale, direct hits redirected), built-in audience link (`linkLabel`, `linkUrl`), referring site `partner.*` on any extension, manifest served stale while it refreshes in the background, statistics resolve `auto` audiences from the source-memory cookie, tracker `onView` callback; `auto` is a reserved audience key.
 
