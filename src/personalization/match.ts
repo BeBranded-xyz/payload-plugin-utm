@@ -1,7 +1,7 @@
 /**
  * Edge-safe personalization core: no Payload, React or Next.js imports.
  */
-import { utmParameters } from "../utilities.js";
+import { normalizeUtmValue, utmParameters } from "../utilities.js";
 
 export const audienceOperators = [
   "equals",
@@ -27,7 +27,21 @@ export type AudienceRule = {
   /** ISO dates; outside this window the audience is ignored. */
   startsAt?: string | null;
   endsAt?: string | null;
+  /**
+   * Public paths with content for this audience (static mode). Undefined means
+   * unknown: every path is rewritten.
+   */
+  paths?: string[];
 };
+/** Where a visit comes from: campaign parameters and/or the referring site. */
+export type CampaignTouch = {
+  params?: URLSearchParams | Record<string, string>;
+  /** Referring hostname or URL, e.g. `coudac.com`. */
+  referrer?: string | null;
+};
+export type TouchInput = URLSearchParams | CampaignTouch;
+/** Condition parameter that targets the referring site instead of a query parameter. */
+export const REFERRER_PARAMETER = "$referrer";
 export type AudienceManifest = { version: 1; audiences: AudienceRule[] };
 export type ActiveAudience = { key: string; id?: string | number };
 export type PersonalizationValue = {
@@ -39,7 +53,10 @@ export const AUDIENCE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const RESERVED_AUDIENCE_KEYS = ["default"] as const;
 export const AUDIENCE_HEADER = "x-utm-audience";
 export const AUDIENCE_ID_HEADER = "x-utm-audience-id";
-export const AUDIENCE_COOKIE = "utm_audience";
+/** Cookie holding the visitor's source memory (see `SourceMemory`). */
+export const AUDIENCE_COOKIE = "utm_memory";
+/** Request header carrying the serialized source memory to Server Components. */
+export const SOURCE_MEMORY_HEADER = "x-utm-source-memory";
 export const utmQueryParameters = Object.values(utmParameters);
 
 export function isValidAudienceKey(value: unknown): value is string {
@@ -53,6 +70,30 @@ export function isValidAudienceKey(value: unknown): value is string {
 const clean = (value: unknown) =>
   typeof value === "string" ? value.trim().toLowerCase() : "";
 
+const asParams = (params: CampaignTouch["params"]): URLSearchParams =>
+  params instanceof URLSearchParams
+    ? params
+    : new URLSearchParams(params ?? {});
+const asTouch = (input: TouchInput): CampaignTouch =>
+  input instanceof URLSearchParams ? { params: input } : input;
+
+/** Lowercase hostname without `www.`; accepts a bare domain or a URL. */
+export function normalizeHost(value: unknown): string {
+  if (typeof value !== "string") return "";
+  let host = value.trim().toLowerCase();
+  if (!host) return "";
+  if (host.includes("://"))
+    try {
+      host = new URL(host).hostname;
+    } catch {
+      return "";
+    }
+  host = host.split(/[/?#]/)[0]!.replace(/:\d+$/, "").replace(/\.$/, "");
+  return host.replace(/^www\./, "");
+}
+const sameOrSubdomain = (actual: string, expected: string) =>
+  expected !== "" && (actual === expected || actual.endsWith("." + expected));
+
 /** Case-insensitive parameter lookup; the first non-empty value wins. */
 function readParameter(params: URLSearchParams, name: string): string {
   const wanted = name.trim().toLowerCase();
@@ -61,11 +102,44 @@ function readParameter(params: URLSearchParams, name: string): string {
   return "";
 }
 
-export function conditionMatches(
-  params: URLSearchParams,
+function referrerMatches(
+  referrer: unknown,
   condition: AudienceCondition,
 ): boolean {
-  const actual = readParameter(params, condition.parameter);
+  const actual = normalizeHost(referrer);
+  const expected = normalizeHost(condition.value);
+  switch (condition.operator) {
+    case "exists":
+      return actual !== "";
+    case "equals":
+      return actual !== "" && sameOrSubdomain(actual, expected);
+    case "notEquals":
+      return !sameOrSubdomain(actual, expected);
+    case "in":
+      return (
+        actual !== "" &&
+        String(condition.value ?? "")
+          .split(",")
+          .map(normalizeHost)
+          .some((domain) => sameOrSubdomain(actual, domain))
+      );
+    case "contains":
+      return actual !== "" && expected !== "" && actual.includes(expected);
+    case "startsWith":
+      return actual !== "" && expected !== "" && actual.startsWith(expected);
+    default:
+      return false;
+  }
+}
+
+export function conditionMatches(
+  input: TouchInput,
+  condition: AudienceCondition,
+): boolean {
+  const touch = asTouch(input);
+  if (condition.parameter === REFERRER_PARAMETER)
+    return referrerMatches(touch.referrer, condition);
+  const actual = readParameter(asParams(touch.params), condition.parameter);
   const expected = clean(condition.value);
   switch (condition.operator) {
     case "exists":
@@ -93,12 +167,13 @@ export function conditionMatches(
 }
 
 export function audienceMatches(
-  params: URLSearchParams,
+  input: TouchInput,
   audience: AudienceRule,
 ): boolean {
   if (!audience.conditions.length) return false;
+  const touch = asTouch(input);
   const results = audience.conditions.map((condition) =>
-    conditionMatches(params, condition),
+    conditionMatches(touch, condition),
   );
   return audience.match === "any"
     ? results.some(Boolean)
@@ -120,10 +195,11 @@ export function isAudienceLive(
 
 /** Lowest priority first, then manifest order. Audiences outside their dates are skipped. */
 export function resolveAudience(
-  params: URLSearchParams,
+  input: TouchInput,
   manifest: AudienceManifest,
   now: Date = new Date(),
 ): ActiveAudience | null {
+  const touch = asTouch(input);
   const ordered = manifest.audiences
     .filter((audience) => isAudienceLive(audience, now))
     .map((audience, index) => ({ audience, index }))
@@ -133,9 +209,19 @@ export function resolveAudience(
         a.index - b.index,
     );
   for (const { audience } of ordered)
-    if (audienceMatches(params, audience))
+    if (audienceMatches(touch, audience))
       return { key: audience.key, id: audience.id };
   return null;
+}
+
+/** Query parameters worth remembering: UTM plus custom parameters used by rules. */
+export function trackedParameterNames(manifest: AudienceManifest): Set<string> {
+  const names = new Set(utmQueryParameters as string[]);
+  for (const audience of manifest.audiences)
+    for (const condition of audience.conditions)
+      if (condition.parameter !== REFERRER_PARAMETER)
+        names.add(condition.parameter.toLowerCase());
+  return names;
 }
 
 /** True when the URL carries a UTM parameter or a custom parameter used by a rule. */
@@ -143,10 +229,7 @@ export function hasCampaignParameters(
   params: URLSearchParams,
   manifest: AudienceManifest,
 ): boolean {
-  const names = new Set(utmQueryParameters as string[]);
-  for (const audience of manifest.audiences)
-    for (const condition of audience.conditions)
-      names.add(condition.parameter.toLowerCase());
+  const names = trackedParameterNames(manifest);
   for (const [key, value] of params)
     if (names.has(key.toLowerCase()) && value.trim()) return true;
   return false;
@@ -173,15 +256,26 @@ export function audienceDocToRule(doc: Record<string, unknown>): unknown {
     match: doc.match,
     startsAt: doc.startsAt,
     endsAt: doc.endsAt,
+    paths: doc.paths,
     conditions: Array.isArray(doc.conditions)
       ? doc.conditions.map((c: Record<string, unknown>) => ({
           parameter:
-            c?.parameter === "custom" ? c.customParameter : c?.parameter,
+            c?.parameter === "custom"
+              ? c.customParameter
+              : c?.parameter === "referrer"
+                ? REFERRER_PARAMETER
+                : c?.parameter,
           operator: c?.operator,
           value: c?.value,
         }))
       : [],
   };
+}
+
+/** `/menu/` → `/menu`; query and hash removed; root stays `/`. */
+export function normalizePath(path: string): string {
+  const clean = path.split(/[?#]/)[0]!.replace(/\/{2,}/g, "/");
+  return clean.length > 1 ? clean.replace(/\/+$/, "") || "/" : "/";
 }
 
 const validDate = (value: unknown): value is string =>
@@ -231,6 +325,22 @@ export function parseAudienceManifest(input: unknown): AudienceManifest {
       conditions,
       ...(validDate(entry.startsAt) ? { startsAt: entry.startsAt } : {}),
       ...(validDate(entry.endsAt) ? { endsAt: entry.endsAt } : {}),
+      ...(Array.isArray(entry.paths)
+        ? {
+            paths: [
+              ...new Set(
+                entry.paths
+                  .filter(
+                    (path): path is string =>
+                      typeof path === "string" &&
+                      path.startsWith("/") &&
+                      path.length <= 2048,
+                  )
+                  .map(normalizePath),
+              ),
+            ].slice(0, 1000),
+          }
+        : {}),
     });
   }
   return { version: 1, audiences };
@@ -494,6 +604,7 @@ export function simulateCampaignUrl(
   manifest: AudienceManifest,
   documents: readonly SimulatedDocument[],
   now: Date = new Date(),
+  referrer?: string | null,
 ): SimulationResult {
   let params: URLSearchParams;
   try {
@@ -501,7 +612,7 @@ export function simulateCampaignUrl(
   } catch {
     return { ok: false };
   }
-  const audience = resolveAudience(params, manifest, now);
+  const audience = resolveAudience({ params, referrer }, manifest, now);
   return {
     ok: true,
     audience,
@@ -613,4 +724,233 @@ export function consistencyAlerts(input: {
       });
   }
   return alerts;
+}
+
+/* ------------------------------------------------------------------ */
+/* Source memory: where the visitor came from, kept in one cookie.     */
+/* ------------------------------------------------------------------ */
+
+/** One arrival: tracked parameters, referring host, epoch seconds. */
+export type SourceTouch = { p?: Record<string, string>; r?: string; t: number };
+/**
+ * `f` first and `l` latest arrival from a campaign or another site (attribution);
+ * `s` the arrival that selected the current audience (personalization).
+ */
+export type SourceMemory = {
+  v: 1;
+  f?: SourceTouch;
+  l?: SourceTouch;
+  s?: SourceTouch;
+};
+
+const MAX_VALUE = 200;
+const MAX_PARAMS = 12;
+
+function sanitizeTouch(value: unknown): SourceTouch | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.t !== "number" || !Number.isFinite(raw.t)) return undefined;
+  const touch: SourceTouch = { t: Math.floor(raw.t) };
+  if (raw.p && typeof raw.p === "object") {
+    const p: Record<string, string> = {};
+    for (const [key, val] of Object.entries(raw.p).slice(0, MAX_PARAMS))
+      if (/^[A-Za-z0-9_.-]{1,64}$/.test(key) && typeof val === "string")
+        p[key] = val.slice(0, MAX_VALUE);
+    if (Object.keys(p).length) touch.p = p;
+  }
+  const host = normalizeHost(raw.r);
+  if (host && /^[a-z0-9.-]{1,253}$/.test(host)) touch.r = host;
+  return touch.p || touch.r ? touch : undefined;
+}
+
+export function parseSourceMemory(value: unknown): SourceMemory | null {
+  if (typeof value !== "string" || !value || value.length > 4096) return null;
+  try {
+    const raw = JSON.parse(decodeURIComponent(value)) as Record<
+      string,
+      unknown
+    >;
+    if (!raw || raw.v !== 1) return null;
+    const memory: SourceMemory = { v: 1 };
+    for (const key of ["f", "l", "s"] as const) {
+      const touch = sanitizeTouch(raw[key]);
+      if (touch) memory[key] = touch;
+    }
+    return memory;
+  } catch {
+    return null;
+  }
+}
+
+export function serializeSourceMemory(memory: SourceMemory): string {
+  return encodeURIComponent(JSON.stringify(memory));
+}
+
+/**
+ * The arrival described by this request, or null for internal navigation and
+ * direct visits. Only tracked parameters are kept; same-site referrers are ignored.
+ */
+export function touchFromRequest(input: {
+  params: URLSearchParams;
+  referrer?: string | null;
+  host?: string | null;
+  manifest: AudienceManifest;
+  now?: Date;
+}): SourceTouch | null {
+  const names = trackedParameterNames(input.manifest);
+  const p: Record<string, string> = {};
+  for (const [key, value] of input.params)
+    if (
+      names.has(key.toLowerCase()) &&
+      value.trim() &&
+      Object.keys(p).length < MAX_PARAMS
+    )
+      p[key.toLowerCase()] = value.trim().slice(0, MAX_VALUE);
+  const referrer = normalizeHost(input.referrer);
+  const self = normalizeHost(input.host);
+  const external =
+    referrer && referrer !== self && !referrer.endsWith("." + self)
+      ? referrer
+      : undefined;
+  if (!Object.keys(p).length && !external) return null;
+  return {
+    ...(Object.keys(p).length ? { p } : {}),
+    ...(external ? { r: external } : {}),
+    t: Math.floor((input.now ?? new Date()).getTime() / 1000),
+  };
+}
+
+export const touchToInput = (touch: SourceTouch): CampaignTouch => ({
+  params: touch.p ?? {},
+  referrer: touch.r ?? null,
+});
+
+/**
+ * Sticky rule: a remembered audience stays until another audience replaces it
+ * or it expires. Arrivals that match nothing are recorded for attribution only.
+ */
+export function updateSourceMemory(input: {
+  memory: SourceMemory | null;
+  touch: SourceTouch | null;
+  manifest: AudienceManifest;
+  maxAgeSeconds: number;
+  now?: Date;
+}): {
+  audience: ActiveAudience | null;
+  memory: SourceMemory | null;
+  changed: boolean;
+} {
+  const now = input.now ?? new Date();
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  const fresh = (touch?: SourceTouch) =>
+    touch && nowSeconds - touch.t < input.maxAgeSeconds ? touch : undefined;
+  const previous = input.memory;
+  const sticky = fresh(previous?.s);
+  const remembered = sticky
+    ? resolveAudience(touchToInput(sticky), input.manifest, now)
+    : null;
+  if (!input.touch)
+    return { audience: remembered, memory: previous, changed: false };
+  const candidate = resolveAudience(
+    touchToInput(input.touch),
+    input.manifest,
+    now,
+  );
+  const memory: SourceMemory = {
+    v: 1,
+    f: fresh(previous?.f) ?? input.touch,
+    l: input.touch,
+    ...(candidate ? { s: input.touch } : sticky ? { s: sticky } : {}),
+  };
+  return { audience: candidate ?? remembered, memory, changed: true };
+}
+
+/* ------------------------------------------------------------------ */
+/* Audience content tokens: {{audience.name|our clients}}              */
+/* ------------------------------------------------------------------ */
+
+const TOKEN = /\{\{\s*audience\.([A-Za-z0-9_]{1,64})\s*(?:\|([^}]*))?\}\}/g;
+
+/**
+ * Replace `{{audience.<field>}}` / `{{audience.<field>|fallback}}` in every
+ * string of `value` (block data, Lexical JSON…) with the active audience's
+ * content fields. Values only ever come from the CMS, never from the URL.
+ * Returns a copy; `content` null means default visitor (fallbacks are used).
+ */
+export function fillAudienceTokens<T>(
+  value: T,
+  content: Record<string, unknown> | null | undefined,
+): T {
+  const replace = (text: string) =>
+    text.includes("{{")
+      ? text.replace(TOKEN, (_, field: string, fallback?: string) => {
+          const found = content?.[field];
+          return typeof found === "string" && found.trim()
+            ? found
+            : typeof found === "number"
+              ? String(found)
+              : (fallback ?? "").trim();
+        })
+      : text;
+  const walk = (input: unknown): unknown => {
+    if (typeof input === "string") return replace(input);
+    if (Array.isArray(input)) return input.map(walk);
+    if (
+      input &&
+      typeof input === "object" &&
+      Object.getPrototypeOf(input) === Object.prototype
+    )
+      return Object.fromEntries(
+        Object.entries(input as Record<string, unknown>).map(([key, child]) => [
+          key,
+          walk(child),
+        ]),
+      );
+    return input;
+  };
+  return walk(value) as T;
+}
+
+/**
+ * Audience prefilled from a saved UTM link: matches its source and campaign
+ * (and content when set), so the link triggers it.
+ */
+export function audienceDraftFromLink(link: {
+  title?: string | null;
+  source?: string | null;
+  campaign?: string | null;
+  content?: string | null;
+}): {
+  title: string;
+  key: string;
+  match: "all";
+  conditions: { parameter: string; operator: "equals"; value: string }[];
+} | null {
+  const source = link.source?.trim();
+  const campaign = link.campaign?.trim();
+  if (!source || !campaign) return null;
+  const conditions = [
+    { parameter: "utm_source", operator: "equals" as const, value: source },
+    { parameter: "utm_campaign", operator: "equals" as const, value: campaign },
+    ...(link.content?.trim()
+      ? [
+          {
+            parameter: "utm_content",
+            operator: "equals" as const,
+            value: link.content.trim(),
+          },
+        ]
+      : []),
+  ];
+  let key = normalizeUtmValue(`${source}-${campaign}`, "slug")
+    .slice(0, 60)
+    .replace(/-+$/, "");
+  if (!isValidAudienceKey(key))
+    key = `audience-${key}`.slice(0, 60).replace(/-+$/, "");
+  return {
+    title: link.title?.trim() || `${source} · ${campaign}`,
+    key,
+    match: "all",
+    conditions,
+  };
 }

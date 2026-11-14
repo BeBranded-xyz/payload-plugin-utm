@@ -7,13 +7,18 @@ import {
   AUDIENCE_COOKIE,
   AUDIENCE_HEADER,
   AUDIENCE_ID_HEADER,
+  SOURCE_MEMORY_HEADER,
   findAudience,
-  hasCampaignParameters,
   isValidAudienceKey,
+  normalizePath,
   parseAudienceManifest,
-  resolveAudience,
+  parseSourceMemory,
+  serializeSourceMemory,
+  touchFromRequest,
+  updateSourceMemory,
   type ActiveAudience,
   type AudienceManifest,
+  type SourceMemory,
 } from "./personalization/match.js";
 
 export type PersonalizationMiddlewareOptions = {
@@ -27,9 +32,13 @@ export type PersonalizationMiddlewareOptions = {
   cacheTtlSeconds?: number;
   /** Abort a manifest request after this delay, default 1500 ms. */
   timeoutMs?: number;
-  /** Remember the audience after the landing page. `false` personalizes only URLs carrying parameters. */
+  /**
+   * Remember where the visitor came from (UTM parameters and referring site,
+   * first/latest/sticky arrival), 90 days by default. `false` personalizes only
+   * the landing request.
+   */
   cookie?: false | { name?: string; maxAgeSeconds?: number; secure?: boolean };
-  /** Return false to skip the cookie (e.g. no consent). Personalization of the current URL still applies. */
+  /** Return false to neither read nor write the cookie (e.g. no consent). The landing request is still personalized. */
   consent?: (request: NextRequest) => boolean;
   /**
    * Static mode: rewrite `/path` to `<prefix>/<audience>/path` so every
@@ -105,7 +114,7 @@ export function createPersonalizationMiddleware(
     (options.cookie !== false && options.cookie?.name) || AUDIENCE_COOKIE;
   const maxAge =
     (options.cookie !== false && options.cookie?.maxAgeSeconds) ||
-    60 * 60 * 24 * 30;
+    60 * 60 * 24 * 90;
   const prefix =
     options.rewrite &&
     "/" + (options.rewrite.prefix ?? "/utm-audience").replace(/^\/+|\/+$/g, "");
@@ -135,48 +144,70 @@ export function createPersonalizationMiddleware(
 
     const manifest = await getManifest(request, options);
     const previewKey = previewParam ? url.searchParams.get(previewParam) : null;
-    const preview = previewKey !== null;
-    const fromUrl =
-      !preview && hasCampaignParameters(url.searchParams, manifest);
     const allowCookie =
       options.cookie !== false && (options.consent?.(request) ?? true);
     let audience: ActiveAudience | null = null;
-    if (preview) audience = findAudience(manifest, previewKey);
-    else if (fromUrl) audience = resolveAudience(url.searchParams, manifest);
-    else if (allowCookie)
-      audience = findAudience(manifest, request.cookies.get(cookieName)?.value);
+    let memory: SourceMemory | null = null;
+    let changed = false;
+    if (previewKey !== null) audience = findAudience(manifest, previewKey);
+    else {
+      const touch = touchFromRequest({
+        params: url.searchParams,
+        referrer: request.headers.get("referer"),
+        host: request.headers.get("host") ?? url.host,
+        manifest,
+      });
+      const result = updateSourceMemory({
+        memory: allowCookie
+          ? parseSourceMemory(request.cookies.get(cookieName)?.value)
+          : null,
+        touch,
+        manifest,
+        maxAgeSeconds: maxAge,
+      });
+      audience = result.audience;
+      memory = allowCookie ? result.memory : null;
+      changed = allowCookie && result.changed;
+    }
 
     const headers = new Headers(request.headers);
     headers.delete(AUDIENCE_HEADER);
     headers.delete(AUDIENCE_ID_HEADER);
+    headers.delete(SOURCE_MEMORY_HEADER);
     if (audience) {
       headers.set(AUDIENCE_HEADER, audience.key);
       if (audience.id !== undefined)
         headers.set(AUDIENCE_ID_HEADER, String(audience.id));
     }
+    if (memory)
+      headers.set(SOURCE_MEMORY_HEADER, serializeSourceMemory(memory));
 
+    // Static mode: only paths that have content for this audience get a variant.
+    const paths = audience
+      ? manifest.audiences.find((item) => item.key === audience!.key)?.paths
+      : undefined;
+    const rewrite =
+      prefix &&
+      audience &&
+      (!paths || paths.includes(normalizePath(url.pathname)));
     let response: NextResponse;
-    if (prefix && audience) {
+    if (rewrite) {
       const target = url.clone();
-      target.pathname = `${prefix}/${audience.key}${url.pathname === "/" ? "" : url.pathname}`;
+      target.pathname = `${prefix}/${audience!.key}${url.pathname === "/" ? "" : url.pathname}`;
       response = NextResponse.rewrite(target, { request: { headers } });
     } else response = NextResponse.next({ request: { headers } });
 
-    if (fromUrl && allowCookie) {
-      if (audience)
-        response.cookies.set(cookieName, audience.key, {
-          maxAge,
-          path: "/",
-          httpOnly: true,
-          sameSite: "lax",
-          secure:
-            (options.cookie !== false && options.cookie?.secure) ??
-            url.protocol === "https:",
-        });
-      // Last touch: a new campaign that matches nothing resets the audience.
-      else if (request.cookies.has(cookieName))
-        response.cookies.delete(cookieName);
-    }
+    // Written only on arrivals, so cached internal navigation carries no Set-Cookie.
+    if (changed && memory)
+      response.cookies.set(cookieName, serializeSourceMemory(memory), {
+        maxAge,
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure:
+          (options.cookie !== false && options.cookie?.secure) ??
+          url.protocol === "https:",
+      });
     return response;
   };
 }
@@ -204,6 +235,15 @@ export async function getActiveAudience(): Promise<ActiveAudience | null> {
   return id ? { key, id } : { key };
 }
 
+/**
+ * Where the visitor came from (first, latest and audience-selecting arrival),
+ * e.g. to attach UTM parameters to a lead form. Null without consent or memory.
+ */
+export async function getSourceMemory(): Promise<SourceMemory | null> {
+  const { headers } = await import("next/headers.js");
+  return parseSourceMemory((await headers()).get(SOURCE_MEMORY_HEADER));
+}
+
 /** Static mode: validate the `[audience]` route segment. */
 export function audienceFromParam(value: unknown): string | null {
   return isValidAudienceKey(value) ? value : null;
@@ -213,7 +253,13 @@ export {
   AUDIENCE_COOKIE,
   AUDIENCE_HEADER,
   AUDIENCE_ID_HEADER,
+  SOURCE_MEMORY_HEADER,
+  fillAudienceTokens,
   filterPersonalizedBlocks,
   isVisibleForAudience,
 } from "./personalization/match.js";
-export type { ActiveAudience } from "./personalization/match.js";
+export type {
+  ActiveAudience,
+  SourceMemory,
+  SourceTouch,
+} from "./personalization/match.js";

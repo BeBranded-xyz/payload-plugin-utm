@@ -2,7 +2,9 @@
 
 Create campaign links where your content already lives: in Payload CMS.
 
-Live URL generation, one-click copy, reusable source/medium presets, a searchable campaign inventory, permission-aware CSV exports and opt-in content personalization by campaign audience. No analytics account, redirect service or external API required.
+Live URL generation, one-click copy, reusable source/medium presets, a searchable campaign inventory and permission-aware CSV exports. No analytics account, redirect service or external API required.
+
+**New in 0.2 (opt-in):** personalize your pages for the visitors those links bring. A dedicated hero for `utm_source=restaurant-a`, more e-commerce case studies for visitors referred by a partner agency, a creator's name on the home page for their UGC campaign — configured block by block in the Payload admin, rendered by Next.js without flicker. See [Personalize pages from your links](#personalize-pages-from-your-links-opt-in).
 
 **Community plugin · MIT · Payload 3.92+ · React 19 · Node 22+**
 
@@ -113,9 +115,11 @@ Use your normal authenticated Payload session/API credentials and your app's API
 
 CSV uses UTF-8 with a BOM, CRLF line endings and quoted cells. Values that could be interpreted as spreadsheet formulas are prefixed with an apostrophe. Responses are private and not cached. Archiving organizes the inventory: it does not deactivate links that have already been shared.
 
-## Content personalization (opt-in)
+## Personalize pages from your links (opt-in)
 
-Show different blocks to visitors arriving from a campaign, e.g. a dedicated hero for `utm_source=restaurant-a`. Nothing below is active unless you pass `personalization`.
+The links you create above can now change what their visitors see. Visitors referred by another site without any UTM (a partner's blog, a directory) can be targeted too. Nothing below is active unless you pass `personalization`.
+
+**Quickest path:** open a saved UTM link → **Personalize the site for this link**. An audience matching its source and campaign is created and attached. Then, on a page, use *Create a variant for…* on a block and edit the copy.
 
 ### 1. Enable it
 
@@ -129,7 +133,9 @@ utmPlugin({
 
 This adds **Marketing → Campaign audiences** and a **Personalization** group to the listed blocks, wherever they are used (collections, globals, nested blocks, `config.blocks`).
 
-- An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term` or any other URL parameter (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch, a priority (lower wins) and optional **campaign dates** (`startsAt` / `endsAt`): outside that window the audience is ignored, including for visitors who already have it in their cookie. Comparisons ignore case and outer whitespace.
+- An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term`, any other URL parameter or the **referring site** (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch, a priority (lower wins) and optional **campaign dates** (`startsAt` / `endsAt`): outside that window the audience is ignored, including for visitors who already have it in memory. Comparisons ignore case and outer whitespace.
+- **Referring site** conditions take a domain (`partner.com`, subdomains and `www.` included). Browsers usually send only the origin, which is enough. Some links send nothing (apps, `rel="noreferrer"`): for an important partner, combine *referring site is partner.com* **or** *utm_source is partner* with "any condition".
+- **Audience content**: a display name, a tagline (and an image with `content: { imageCollection: 'media' }`, extra fields with `content.fields`). Write `{{audience.displayName|our clients}}` in any block text and render with `fillAudienceTokens(block, await getAudienceContent(payload, audience))`. Values always come from the CMS, never from the URL, so nobody can make your site display arbitrary text.
 - A **block** is visible to *everyone* (default), *only these audiences* or *everyone except these audiences*. Typical page: the default hero set to "except Restaurant A" and a second hero set to "only Restaurant A".
 
 `personalizationField()` is exported if you want the same control on array rows or custom places. Run `generate:importmap`, `generate:types` and your migrations as usual.
@@ -149,7 +155,14 @@ export const config = { matcher: ['/((?!api|admin|_next|.*\\..*).*)'] }
 
 Next.js 15: same code in `middleware.ts`, exported as `middleware` instead of `proxy`.
 
-It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). When the URL carries campaign parameters it picks the matching audience (last touch) and remembers it in an `httpOnly` cookie for 30 days; otherwise it reuses that cookie. Only keys that exist in the manifest are ever forwarded.
+It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). Only audiences that exist in the manifest are ever forwarded.
+
+**Source memory.** On an *arrival* (tracked campaign parameters, or a referrer from another site) the middleware stores, in one `httpOnly` cookie (`utm_memory`, 90 days):
+
+- the **first** and **latest** arrivals (parameters, referring domain, date), for attribution;
+- the arrival that selected the current audience.
+
+Rules are re-evaluated on every request, so audiences created or edited later still apply. **A remembered audience stays until another audience replaces it, or until it expires**: a visitor referred by a partner who comes back through Google or by typing your URL still gets the partner version; arriving through another campaign that has its own audience switches to it. Internal navigation is never an arrival and never sets a cookie, so cached pages stay cacheable. UTM parameters are never propagated in internal links (that would split GA4 sessions). Read the memory in a Server Component with `getSourceMemory()`, e.g. to attach the original campaign to a lead form.
 
 Options: `manifestUrl` (absolute, for a separate CMS), `loadManifest` (Edge Config, KV, static JSON…), `secret` (paired with `personalization.manifest.secret`), `cacheTtlSeconds`, `cookie: false | { name, maxAgeSeconds }`, `consent: (request) => boolean`, `rewrite`, `previewParam` (default `utm_preview`, `false` to disable).
 
@@ -165,6 +178,17 @@ const blocks = filterPersonalizedBlocks(page.layout, audience)
 ```
 
 **Static pages**: `createPersonalizationMiddleware({ rewrite: { prefix: 'utm-audience' } })` rewrites `/menu?utm_source=…` to `/utm-audience/<key>/menu`, so each audience variant is cached like any static page. Add a route such as `app/(site)/utm-audience/[audience]/[[...slug]]/page.tsx` that renders the same page with `filterPersonalizedBlocks(page.layout, audienceFromParam(params.audience))`, and emit the public URL as canonical. Visitors without an audience keep the normal route; direct visits to the prefix are redirected (308). In this mode, query with `depth ≥ 1` so audiences are populated with their `key`.
+
+**Only vary the pages that change.** Tell the plugin your public paths and the manifest lists, per audience, the pages with content for it; the middleware then rewrites only those, and every other page stays one shared cached version:
+
+```ts
+personalization: {
+  blocks: ['hero'],
+  paths: { collections: { pages: ({ doc }) => (doc.slug === 'home' ? '/' : `/${doc.slug}`) } },
+}
+```
+
+Every collection or global that uses a personalized block needs a resolver (startup error otherwise). If the scan fails or exceeds `paths.limit` (2000 documents per collection), the manifest omits paths and every page is rewritten, so variants are never lost.
 
 **Keeping static variants fresh.** Your pages' existing `revalidatePath('/menu')` hooks do not reach `/utm-audience/<key>/menu`. Call `revalidatePersonalizedRoutes()` (from `payload-plugin-utm/next`) next to them, and when audiences change:
 
@@ -185,21 +209,21 @@ It invalidates every route under the prefix; variants are regenerated on their n
 
 - Each audience has an **Aperçu / Preview** panel: enter a page path and open it as that audience or as the default visitor. It uses `?utm_preview=<key>` (or `default`), which the middleware honours for that request only, without changing the visitor's cookie. Set `personalization.preview: { siteUrl: 'https://www.example.com' }` when the admin is on another origin, `preview.param` if you renamed `previewParam`, or `preview: false` to hide it. Anyone can use the parameter; it only shows content that is already public.
 - The panel also suggests the campaign parameters that trigger the audience and links to the UTM links that target it.
-- With personalization on, **UTM links** get an optional *Personalized audience* field. The sidebar tells editors which audience the link will actually trigger (priorities included) and warns when it does not trigger the selected one or when that audience is archived.
+- With personalization on, **UTM links** get an optional *Personalized audience* field. The sidebar tells editors which audience the link will actually trigger (priorities included) and warns when it does not trigger the selected one or when that audience is archived. When the link triggers no audience, **Personalize the site for this link** creates one from its source, campaign (and content) and attaches it; when it already triggers one, a button attaches it.
 
 ### Editor experience
 
 - **Personalization panel** in the sidebar of every collection or global that uses a personalized block: audiences used on the document with their block count, 👁 preview as each audience or as the default visitor (the page path is pre-filled from a `slug` field when there is one), and warnings for blocks restricted to no audience, to a deleted or archived audience, or to an ended campaign.
 - **Create a variant in one click**, from the panel ("Personalize a block…") or from the *Create a variant for…* menu inside each block: the block is duplicated right below it, the copy is shown **only** to the chosen audience and the original stops showing to it (it becomes "everyone except…", or the audience is added to/removed from its existing list). Edit the copy, then save as usual.
 - **Badges in block headers**: "🎯 Restaurant A", "Except Restaurant A" or "⚠ no audience", next to the block number, type and editable name. Blocks that already define `admin.components.Label` or `admin.components.Block` keep their own header.
-- **Personalization view** at `/admin/personalization` (nav link 🎯 *Personalization*): every audience with its status (active, scheduled, ended, archived), the documents and number of blocks it changes, its UTM links and priority; a list of consistency checks (unused audiences, blocks targeting archived or deleted audiences, UTM links that do not trigger their audience); and a **URL simulator**: paste a campaign URL to see the audience it triggers and which personalized blocks each document shows or hides, with a preview link. The view reads documents through Payload's default `find` (no `draft` flag) with the signed-in user's permissions (first 200 documents per collection). Move it with `personalization.adminView: { path: '/campaigns' }` or remove it with `adminView: false`.
+- **Personalization view** at `/admin/personalization` (nav link 🎯 *Personalization*): every audience with its status (active, scheduled, ended, archived), the documents and number of blocks it changes, its UTM links and priority; a list of consistency checks (unused audiences, blocks targeting archived or deleted audiences, UTM links that do not trigger their audience); and a **URL simulator**: paste a campaign URL (and optionally a referring site) to see the audience it triggers and which personalized blocks each document shows or hides, with a preview link. The view reads documents through Payload's default `find` (no `draft` flag) with the signed-in user's permissions (first 200 documents per collection). Move it with `personalization.adminView: { path: '/campaigns' }` or remove it with `adminView: false`.
 
 The view uses `DefaultTemplate` from `@payloadcms/next`, already installed in any app that serves the Payload admin with Next.js.
 
 ### Measurement, privacy, SEO
 
 - `<PersonalizationTracker audience={key} />` from `payload-plugin-utm/tracker` pushes `{ event: 'utm_personalization', utm_audience }` to `window.dataLayer`. Nothing else is sent anywhere.
-- The cookie stores an audience key only. Depending on your jurisdiction, personalization cookies may require consent: use `consent` or `cookie: false` (the landing URL is still personalized).
+- The `utm_memory` cookie stores campaign parameters, referring domains and dates (no identifier, no IP). Personalization and attribution cookies usually require consent in the EU: use `consent: (request) => …` to read your consent cookie, or `cookie: false`. Without consent the memory is neither read nor written and only the landing request is personalized.
 - Crawlers request URLs without UTM parameters and therefore index the default content.
 - The manifest is public by default (it exposes keys and rule values, which already appear in your campaign URLs). Set `personalization.manifest.secret` (≥ 16 chars) to require a bearer token, and `manifest.tenantField` to serve one manifest per tenant via `?tenant=<id>`.
 
@@ -230,7 +254,7 @@ buildUtmVariants(base, [
 
 ## Scope and compatibility
 
-This is a **link-management plugin**, not an attribution platform. It does not record clicks, inject tracking scripts, proxy/shorten URLs, collect visitors, or retrieve GA4 statistics. The opt-in personalization module sets a first-party audience cookie only when you add its middleware. Direct campaign links work independently of Payload after you copy them. Whether a destination records UTM traffic depends on that site's analytics setup.
+This is a **link-management plugin**, not an attribution platform. It does not record clicks, inject tracking scripts, proxy/shorten URLs, collect visitors, or retrieve GA4 statistics. The opt-in personalization module sets a first-party source-memory cookie only when you add its middleware. Direct campaign links work independently of Payload after you copy them. Whether a destination records UTM traffic depends on that site's analytics setup.
 
 Tested with Payload/UI 3.92.0 and React 19.2.6. CI tests the package on Node 22 and 24. A Postgres/Next.js consumer build is also verified during initial release validation; broader database/browser compatibility should be verified in your app before rollout. Use Payload and `@payloadcms/ui` versions that match each other.
 

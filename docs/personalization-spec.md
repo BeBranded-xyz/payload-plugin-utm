@@ -71,6 +71,17 @@ Editors place "Hero Restaurant A" (`only` → restaurant-a) next to the default 
 - **Block header badge**: a `Label` component that re-renders Payload's default header (number, block pill, editable `blockName`) plus an audience pill. Never applied to blocks that customize `Label` or `Block`.
 - **Admin view** (`payload-plugin-utm/rsc#PersonalizationView`, wrapped in `DefaultTemplate`): local API with `overrideAccess: false` and the request user; default `find` (no `draft` flag), `select` limited to the top-level fields that can hold personalized blocks, 200 documents per collection. Pure helpers `collectPersonalizedBlocks`, `summarizeDocument`, `consistencyAlerts` and `simulateCampaignUrl` hold the logic and are unit-tested.
 
+## Provenance (added before release)
+
+Origin of the need: on the BeBranded site, the first referring site (coudac.com, 323 sessions over 180 days) arrives **without UTM** (`coudac.com / referral` in GA4). URL parameters alone cannot target it.
+
+- **Referring site condition**: `$referrer` parameter in the manifest; the admin stores `referrer`. Domains are normalized (scheme, `www.`, port, path removed) and match subdomains.
+- **Source memory cookie** `utm_memory` (JSON, ≤ 12 tracked params of ≤ 200 chars, referring host, epoch seconds): `f` first arrival, `l` latest arrival, `s` arrival that selected the audience. An *arrival* is a request with tracked parameters (UTM + custom parameters used by rules) or an external referrer; same-site referrers and direct visits are not. Rule: the audience is re-resolved from `s` on each request; a new arrival replaces `s` only when it matches an audience (sticky). Expiry 90 days from `s.t`. The cookie is written only on arrivals (no Set-Cookie on internal navigation, so CDN caching is preserved), forwarded to Server Components via `x-utm-source-memory`. Without consent: neither read nor written.
+- **No UTM propagation** in internal links: GA4 treats internal UTM clicks as new campaign sessions.
+- **Audience content**: `content` group (displayName, tagline, optional image, extra fields) and `{{audience.<field>|fallback}}` tokens filled by `fillAudienceTokens()` over any block data, Lexical JSON included. Raw URL values are never rendered (abuse, unbounded cache variants).
+- **Targeted rewrite**: with `personalization.paths`, the manifest scans configured collections/globals, collects personalized blocks (`mode` ≠ all) and lists public paths per audience. The middleware rewrites only listed paths. Any scan failure or overflow omits `paths` → rewrite everything (never lose a variant). Startup error when a personalized collection has no resolver.
+- **From a UTM link**: "Personalize the site for this link" creates an audience (`utm_source` + `utm_campaign` [+ `utm_content`] equals) with a slug key (suffixed on conflict) and attaches it.
+
 ## Out of scope (next)
 
-Referrer / geo / language conditions; Edge Config adapter; percentage A/B within an audience.
+Geo / language conditions; Edge Config adapter; percentage A/B within an audience.

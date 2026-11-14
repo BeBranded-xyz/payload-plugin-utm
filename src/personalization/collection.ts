@@ -12,9 +12,16 @@ import { utmParameters } from "../utilities.js";
 import {
   audienceDocToRule,
   audienceOperators,
+  collectPersonalizedBlocks,
   isValidAudienceKey,
+  normalizeHost,
   parseAudienceManifest,
 } from "./match.js";
+
+/** Public path(s) of a document, or null when it is not routable. */
+export type PathResolver = (args: {
+  doc: Record<string, unknown>;
+}) => string | readonly string[] | null | undefined;
 
 export type PersonalizationOptions = {
   /** Default `utm-audiences`. */
@@ -46,6 +53,27 @@ export type PersonalizationOptions = {
    * consistency alerts, URL simulator). `false` disables the view and its nav link.
    */
   adminView?: false | { path?: `/${string}` };
+  /**
+   * Static mode performance: public paths of documents, per collection or global
+   * slug. The manifest then lists, per audience, the pages that change for it,
+   * and the middleware only rewrites those. Omit to rewrite every path.
+   */
+  paths?: {
+    collections?: Record<string, PathResolver>;
+    globals?: Record<string, PathResolver>;
+    /** Max documents scanned per collection, default 2000. */
+    limit?: number;
+  };
+  /**
+   * Content editors can attach to an audience and reuse in blocks with
+   * `{{audience.<field>}}`: `displayName` and `tagline` are built in.
+   */
+  content?: {
+    /** Adds an `image` upload field pointing at this collection. */
+    imageCollection?: string;
+    /** Extra fields (top-level `name`d text fields work with tokens). */
+    fields?: Field[];
+  };
   overrides?: (collection: CollectionConfig) => CollectionConfig;
 };
 export type AudienceCollectionContext = {
@@ -380,9 +408,69 @@ export function addPersonalizationToBlocks(
   };
 }
 
+async function audiencePaths(
+  req: PayloadRequest,
+  paths: NonNullable<PersonalizationOptions["paths"]>,
+  tenantWhere: Where | undefined,
+): Promise<Map<string, Set<string>> | null> {
+  const byAudience = new Map<string, Set<string>>();
+  const add = (doc: Record<string, unknown>, resolve: PathResolver) => {
+    const blocks = collectPersonalizedBlocks(doc).filter(
+      (block) => block.mode !== "all",
+    );
+    if (!blocks.length) return;
+    const resolved = resolve({ doc });
+    const list = (Array.isArray(resolved) ? resolved : [resolved]).filter(
+      (path): path is string =>
+        typeof path === "string" && path.startsWith("/"),
+    );
+    for (const block of blocks)
+      for (const id of block.audienceIds) {
+        const set = byAudience.get(id) ?? new Set<string>();
+        list.forEach((path) => set.add(path));
+        byAudience.set(id, set);
+      }
+  };
+  try {
+    for (const [collection, resolve] of Object.entries(
+      paths.collections ?? {},
+    )) {
+      const result = await req.payload.find({
+        collection: collection as CollectionSlug,
+        overrideAccess: true,
+        depth: 0,
+        limit: paths.limit ?? 2000,
+        ...(tenantWhere ? { where: tenantWhere } : {}),
+      });
+      if (result.hasNextPage) return null;
+      result.docs.forEach((doc) =>
+        add(doc as Record<string, unknown>, resolve),
+      );
+    }
+    for (const [global, resolve] of Object.entries(paths.globals ?? {}))
+      add(
+        (await req.payload.findGlobal({
+          slug: global as never,
+          overrideAccess: true,
+          depth: 0,
+        })) as Record<string, unknown>,
+        resolve,
+      );
+  } catch (error) {
+    // Incomplete knowledge must not hide variants: fall back to rewriting every path.
+    req.payload.logger.error({
+      err: error,
+      msg: "utmPlugin: audience paths unavailable",
+    });
+    return null;
+  }
+  return byAudience;
+}
+
 function manifestEndpoint(
   slug: string,
   options: PersonalizationOptions["manifest"] = {},
+  paths?: PersonalizationOptions["paths"],
 ): Endpoint {
   const limit = options.limit ?? 500;
   return {
@@ -408,6 +496,10 @@ function manifestEndpoint(
           );
         where.push({ [options.tenantField]: { equals: tenant } });
       }
+      const tenantWhere =
+        typeof tenant === "string" && options.tenantField
+          ? { [options.tenantField]: { equals: tenant } }
+          : undefined;
       // Public, fixed projection: arbitrary filters would expose private fields.
       const result = await req.payload.find({
         collection: slug as CollectionSlug,
@@ -425,10 +517,18 @@ function manifestEndpoint(
           endsAt: true,
         },
       });
+      const pathMap = paths
+        ? await audiencePaths(req, paths, tenantWhere)
+        : null;
       const manifest = parseAudienceManifest({
-        audiences: result.docs.map((doc) =>
-          audienceDocToRule(doc as Record<string, unknown>),
-        ),
+        audiences: result.docs.map((doc) => {
+          const rule = audienceDocToRule(
+            doc as Record<string, unknown>,
+          ) as Record<string, unknown>;
+          return pathMap
+            ? { ...rule, paths: [...(pathMap.get(String(rule.id)) ?? [])] }
+            : rule;
+        }),
       });
       return Response.json(manifest, {
         headers: {
@@ -555,6 +655,13 @@ export function audiencesCollection(
                   })),
                   {
                     label: {
+                      en: "Referring site (domain)",
+                      fr: "Site de provenance (domaine)",
+                    },
+                    value: "referrer",
+                  },
+                  {
+                    label: {
                       en: "Other URL parameter",
                       fr: "Autre paramètre d’URL",
                     },
@@ -602,11 +709,28 @@ export function audiencesCollection(
                 validate: (
                   value: unknown,
                   { siblingData }: { siblingData?: unknown },
-                ) =>
-                  (siblingData as { operator?: string })?.operator ===
-                    "exists" ||
-                  (typeof value === "string" && value.trim() !== "") ||
-                  "Enter a value.",
+                ) => {
+                  const sibling = siblingData as
+                    | { operator?: string; parameter?: string }
+                    | undefined;
+                  if (sibling?.operator === "exists") return true;
+                  if (typeof value !== "string" || value.trim() === "")
+                    return "Enter a value.";
+                  if (
+                    sibling?.parameter === "referrer" &&
+                    ["equals", "notEquals", "in"].includes(
+                      sibling.operator ?? "",
+                    ) &&
+                    value
+                      .split(",")
+                      .some(
+                        (item) =>
+                          !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(normalizeHost(item)),
+                      )
+                  )
+                    return "Enter a domain such as partner.com (subdomains are included).";
+                  return true;
+                },
               } as Field,
             ],
           },
@@ -702,6 +826,42 @@ export function audiencesCollection(
             } as Field,
           ]),
       {
+        name: "content",
+        type: "group",
+        label: { en: "Audience content", fr: "Contenu de l’audience" },
+        admin: {
+          description: {
+            en: "Reuse these values in any block text with {{audience.displayName}} or {{audience.tagline|fallback text}}.",
+            fr: "Réutilisez ces valeurs dans le texte des blocs avec {{audience.displayName}} ou {{audience.tagline|texte par défaut}}.",
+          },
+        },
+        fields: [
+          {
+            name: "displayName",
+            type: "text",
+            maxLength: 120,
+            label: { en: "Display name", fr: "Nom affiché" },
+          },
+          {
+            name: "tagline",
+            type: "textarea",
+            maxLength: 500,
+            label: { en: "Tagline", fr: "Accroche" },
+          },
+          ...(options.content?.imageCollection
+            ? [
+                {
+                  name: "image",
+                  type: "upload",
+                  relationTo: options.content.imageCollection as CollectionSlug,
+                  label: { en: "Image", fr: "Image" },
+                } as Field,
+              ]
+            : []),
+          ...(options.content?.fields ?? []),
+        ],
+      },
+      {
         name: "notes",
         type: "textarea",
         label: { en: "Internal notes", fr: "Notes internes" },
@@ -720,6 +880,6 @@ export function audiencesCollection(
         },
       ],
     },
-    endpoints: [manifestEndpoint(slug, options.manifest)],
+    endpoints: [manifestEndpoint(slug, options.manifest, options.paths)],
   };
 }

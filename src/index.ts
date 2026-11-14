@@ -36,6 +36,8 @@ export {
   type PersonalizationOptions,
 } from "./personalization/collection.js";
 export * from "./personalization/match.js";
+export { getAudienceContent } from "./personalization/server.js";
+export type { PathResolver } from "./personalization/collection.js";
 export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
   return (config) => {
     if (options.enabled === false) return config;
@@ -405,6 +407,31 @@ function withPersonalization(
     throw new Error(
       "utmPlugin: personalization.afterAudienceChange must be a function.",
     );
+  const paths = options.paths;
+  if (paths !== undefined) {
+    const resolvers = [
+      ...Object.values(paths.collections ?? {}),
+      ...Object.values(paths.globals ?? {}),
+    ];
+    if (!resolvers.length || resolvers.some((fn) => typeof fn !== "function"))
+      throw new Error(
+        "utmPlugin: personalization.paths needs path functions per collection or global slug.",
+      );
+    if (
+      paths.limit !== undefined &&
+      (!Number.isInteger(paths.limit) || paths.limit < 1 || paths.limit > 10000)
+    )
+      throw new Error(
+        "utmPlugin: personalization.paths.limit must be an integer between 1 and 10000.",
+      );
+  }
+  if (
+    options.content?.fields !== undefined &&
+    !Array.isArray(options.content.fields)
+  )
+    throw new Error(
+      "utmPlugin: personalization.content.fields must be an array of fields.",
+    );
   let audiences = audiencesCollection(slug, options, context);
   if (options.overrides) audiences = options.overrides(audiences);
   if (audiences.slug !== slug)
@@ -438,6 +465,23 @@ function withPersonalization(
   } = blocks === "all" || blocks.length
     ? addPersonalizationToBlocks(withCollection, blocks, slug, ui)
     : { config: withCollection, targets: [], blockLabels: {} };
+  if (options.paths) {
+    // A personalized collection without a resolver would silently lose its variants.
+    const missing = targets
+      .filter(
+        (target) =>
+          !(
+            target.kind === "collection"
+              ? options.paths?.collections
+              : options.paths?.globals
+          )?.[target.slug],
+      )
+      .map((target) => `${target.kind} "${target.slug}"`);
+    if (missing.length)
+      throw new Error(
+        `utmPlugin: personalization.paths needs a resolver for ${missing.join(", ")}, or remove paths to rewrite every page.`,
+      );
+  }
   if (viewPath === null) return result;
   const views = result.admin?.components?.views ?? {};
   if (views.utmPersonalization)

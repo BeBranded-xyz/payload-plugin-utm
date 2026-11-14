@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DefaultCellComponentProps, TextFieldClientProps } from "payload";
 import {
+  audienceDraftFromLink,
   audienceDocToRule,
   audienceRefIds,
   exampleCampaignQuery,
@@ -193,6 +194,14 @@ const audienceMessages = {
     archived: (name: string) =>
       `“${name}” is archived or has no valid rule: it is never shown.`,
     error: "Audiences could not be loaded to check this link.",
+    personalize: "Personalize the site for this link",
+    attach: (name: string) => `Attach this link to “${name}”`,
+    creating: "Creating the audience…",
+    created:
+      "Audience created and attached. Save this link, then on your pages use “Create a variant for…” to choose what these visitors see.",
+    openAudience: "Open the audience",
+    createError:
+      "The audience could not be created. Check your permissions or create it from Campaign audiences.",
   },
   fr: {
     path: "Chemin de la page",
@@ -212,6 +221,14 @@ const audienceMessages = {
     archived: (name: string) =>
       `« ${name} » est archivée ou sans règle valide : elle n’est jamais affichée.`,
     error: "Impossible de charger les audiences pour vérifier ce lien.",
+    personalize: "Personnaliser le site pour ce lien",
+    attach: (name: string) => `Rattacher ce lien à « ${name} »`,
+    creating: "Création de l’audience…",
+    created:
+      "Audience créée et rattachée. Enregistrez ce lien, puis sur vos pages utilisez « Créer une variante pour… » pour choisir ce que voient ces visiteurs.",
+    openAudience: "Ouvrir l’audience",
+    createError:
+      "Impossible de créer l’audience. Vérifiez vos droits ou créez-la depuis Audiences de campagne.",
   },
 };
 const muted = { color: "var(--theme-elevation-600)", fontSize: 13 };
@@ -356,6 +373,16 @@ export function AudienceMatchNotice({
       });
     return () => controller.abort();
   }, [audiencesSlug, config.routes.api, config.serverURL]);
+  const audienceField = useField<unknown>({ path: "audience" });
+  const [creation, setCreation] = useState<
+    | { status: "idle" }
+    | { status: "busy" }
+    | { status: "done"; id: string | number }
+    | { status: "error" }
+  >({ status: "idle" });
+  const linkTitle = useFormFields(([fields]) =>
+    typeof fields.title?.value === "string" ? fields.title.value : "",
+  );
   const input = useFormFields(([fields]) => {
     const result: UtmInput & { audience?: unknown } = {};
     for (const key of [
@@ -402,11 +429,79 @@ export function AudienceMatchNotice({
       {message}
     </p>
   );
-  if (selectedId === undefined || selectedId === null || selectedId === "")
-    return box(
-      "info",
-      resolved ? text.resolves(nameOf(resolved.key)!) : text.none,
+  const api = `${config.serverURL ?? ""}${config.routes.api}/${audiencesSlug}`;
+  const createAudience = async () => {
+    const draft = audienceDraftFromLink({ title: linkTitle, ...input });
+    if (!draft) return;
+    setCreation({ status: "busy" });
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const key = attempt === 1 ? draft.key : `${draft.key}-${attempt}`;
+      try {
+        const response = await fetch(api, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...draft, key, priority: 0, state: "active" }),
+        });
+        if (response.ok) {
+          const { doc } = (await response.json()) as {
+            doc: { id: string | number };
+          };
+          audienceField.setValue(doc.id);
+          setCreation({ status: "done", id: doc.id });
+          return;
+        }
+        // 400 usually means the key is taken: try the next suffix.
+        if (response.status !== 400) break;
+      } catch {
+        break;
+      }
+    }
+    setCreation({ status: "error" });
+  };
+  const action = (label: string, onClick: () => void) => (
+    <button
+      type="button"
+      className="btn btn--style-secondary btn--size-small"
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+  if (creation.status === "done")
+    return (
+      <div>
+        {box("ok", text.created)}
+        <a
+          href={`${config.routes.admin}/collections/${audiencesSlug}/${creation.id}`}
+        >
+          {text.openAudience}
+        </a>
+      </div>
     );
+  if (selectedId === undefined || selectedId === null || selectedId === "") {
+    const resolvedDoc = resolved
+      ? state.manifest.audiences.find((item) => item.key === resolved.key)
+      : undefined;
+    return (
+      <div>
+        {box(
+          "info",
+          resolved ? text.resolves(nameOf(resolved.key)!) : text.none,
+        )}
+        {resolvedDoc ? (
+          action(text.attach(nameOf(resolvedDoc.key)!), () =>
+            audienceField.setValue(resolvedDoc.id),
+          )
+        ) : creation.status === "busy" ? (
+          <p style={muted}>{text.creating}</p>
+        ) : (
+          action(text.personalize, () => void createAudience())
+        )}
+        {creation.status === "error" && box("warn", text.createError)}
+      </div>
+    );
+  }
   const selected = state.manifest.audiences.find(
     (audience) => String(audience.id) === String(selectedId),
   );
@@ -517,6 +612,7 @@ const editorMessages = {
     simulatorHint:
       "Paste a campaign URL to see which audience it triggers and which personalized blocks visitors get.",
     simulate: "Campaign URL",
+    simulateReferrer: "Referring site (optional), e.g. partner.com",
     invalidUrl: "This is not a valid URL.",
     resolved: (name: string) => `Audience: “${name}”`,
     noneResolved: "No audience: default content.",
@@ -559,6 +655,7 @@ const editorMessages = {
     simulatorHint:
       "Collez une URL de campagne pour voir l’audience déclenchée et les blocs personnalisés que verra le visiteur.",
     simulate: "URL de campagne",
+    simulateReferrer: "Site de provenance (facultatif), ex. partenaire.com",
     invalidUrl: "Cette URL n’est pas valide.",
     resolved: (name: string) => `Audience : « ${name} »`,
     noneResolved: "Aucune audience : contenu par défaut.",
@@ -1054,10 +1151,18 @@ export function PersonalizationSimulator({
 }: SimulatorProps) {
   const text = editorMessages[locale];
   const [url, setUrl] = useState("");
+  const [referrer, setReferrer] = useState("");
   const fallbackOrigin = useOrigin(siteUrl);
-  const result = url.trim()
-    ? simulateCampaignUrl(url, manifest, documents)
-    : null;
+  const result =
+    url.trim() || referrer.trim()
+      ? simulateCampaignUrl(
+          url.trim() || "/",
+          manifest,
+          documents,
+          new Date(),
+          referrer,
+        )
+      : null;
   let previewUrl: string | null = null;
   if (result?.ok && previewParam) {
     try {
@@ -1088,6 +1193,14 @@ export function PersonalizationSimulator({
           value={url}
           onChange={(event) => setUrl(event.target.value)}
           placeholder="https://www.example.com/menu?utm_source=restaurant-a&utm_medium=qr"
+        />
+      </label>
+      <label style={{ display: "grid", gap: 4, maxWidth: 720, marginTop: 8 }}>
+        {text.simulateReferrer}
+        <input
+          value={referrer}
+          onChange={(event) => setReferrer(event.target.value)}
+          placeholder="coudac.com"
         />
       </label>
       {result && !result.ok && <p role="alert">{text.invalidUrl}</p>}
