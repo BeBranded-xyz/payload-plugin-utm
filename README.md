@@ -10,11 +10,12 @@ Live URL generation, one-click copy, reusable source/medium presets, a searchabl
 
 ## Install
 
-Version 0.1.0 is distributed as a built package in [GitHub Releases](https://github.com/BeBranded-xyz/payload-plugin-utm/releases). It is **not published to the npm registry yet**.
-
 ```sh
-pnpm add https://github.com/BeBranded-xyz/payload-plugin-utm/releases/download/v0.1.0/payload-plugin-utm-0.1.0.tgz
+pnpm add payload-plugin-utm        # stable: UTM links, generator, presets, CSV (0.1)
+pnpm add payload-plugin-utm@beta   # 0.2 beta: adds page personalization and statistics
 ```
+
+The default install stays on the stable 0.1 line until 0.2 is released; the beta is opt-in through the `beta` tag.
 
 Add the plugin to your existing Payload configuration:
 
