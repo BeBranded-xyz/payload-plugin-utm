@@ -8,11 +8,11 @@ Live URL generation, one-click copy, reusable source/medium presets, a searchabl
 
 ## Install
 
-Version 0.1.0 is distributed as a built package in [GitHub Releases](https://github.com/BeBranded-xyz/payload-plugin-utm/releases). It is **not published to the npm registry yet**.
-
 ```sh
-pnpm add https://github.com/BeBranded-xyz/payload-plugin-utm/releases/download/v0.1.0/payload-plugin-utm-0.1.0.tgz
+pnpm add payload-plugin-utm
 ```
+
+Also works with `npm install` or `yarn add`. A 0.2 beta that adds opt-in page personalization by campaign audience and statistics is available with `pnpm add payload-plugin-utm@beta`; the default install stays on this stable line.
 
 Add the plugin to your existing Payload configuration:
 

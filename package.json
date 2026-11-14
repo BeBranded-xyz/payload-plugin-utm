@@ -1,6 +1,6 @@
 {
   "name": "payload-plugin-utm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Campaign links, live UTM generation, presets and access-controlled CSV exports for Payload CMS 3.",
   "type": "module",
   "license": "MIT",
