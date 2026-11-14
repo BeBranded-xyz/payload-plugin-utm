@@ -225,6 +225,8 @@ personalization: {
 }
 ```
 
+With localization enabled, the resolver is called once per locale with `{ doc, locale }` and the document read in that locale, so a variant that exists only in French lists only the French path: `({ doc, locale }) => \`${locale === 'fr' ? '/fr' : ''}/${doc.slug}\``.
+
 Every collection or global that uses a personalized block needs a resolver (startup error otherwise). If the scan fails or exceeds `paths.limit` (2000 documents per collection), the manifest omits paths and every page is rewritten, so variants are never lost.
 
 **Keeping static variants fresh.** Your pages' existing `revalidatePath('/menu')` hooks do not reach `/utm-audience/<key>/menu`. Call `revalidatePersonalizedRoutes()` (from `payload-plugin-utm/next`) next to them, and when audiences change:
@@ -248,6 +250,24 @@ It invalidates every route under the prefix; variants are regenerated on their n
 - The panel also suggests the campaign parameters that trigger the audience and links to the UTM links that target it.
 - With personalization on, **UTM links** get an optional *Personalized audience* field. The sidebar tells editors which audience the link will actually trigger (priorities included) and warns when it does not trigger the selected one or when that audience is archived. When the link triggers no audience, **Personalize the site for this link** creates one from its source, campaign (and content) and attaches it; when it already triggers one, a button attaches it.
 
+**Previewing drafts.** By default, preview links open the published page. To preview unsaved variants (Next.js draft mode), add one route to your app and point the admin at it:
+
+```ts
+// app/api/utm-preview/route.ts
+import config from '@payload-config'
+import { createDraftPreviewRoute } from 'payload-plugin-utm/preview'
+
+export const GET = createDraftPreviewRoute({ config })
+```
+
+```ts
+personalization: { preview: { draftRoute: '/api/utm-preview' } }
+```
+
+The route accepts only users signed in to Payload on that domain (otherwise 401), redirects only to same-site paths, enables draft mode and adds `?utm_preview=<key>`. Your pages read drafts when `(await draftMode()).isEnabled` (`draft: true` in `payload.find`), as in Payload's website template. If the admin runs on another host, set Payload's `auth.cookies.domain` to the parent domain so the site sees the session.
+
+**Multilingual sites.** Audience *Display name* and *Tagline* are localized fields; pass the locale to `getAudienceContent(payload, audience, { locale })`.
+
 ### Editor experience
 
 - **Personalization panel** in the sidebar of every collection or global that uses a personalized block: audiences used on the document with their block count, 👁 preview as each audience or as the default visitor (the page path is pre-filled from a `slug` field when there is one), and warnings for blocks restricted to no audience, to a deleted or archived audience, or to an ended campaign.
@@ -257,10 +277,41 @@ It invalidates every route under the prefix; variants are regenerated on their n
 
 The view uses `DefaultTemplate` from `@payloadcms/next`, already installed in any app that serves the Payload admin with Next.js.
 
+### Statistics (opt-in)
+
+`personalization: { stats: true }` adds a **Statistics** section to the Personalization view, for the last 7, 30 or 90 days:
+
+- per audience: **entries** (first page of a visit), page views and **personalized views** (pages that showed content for that audience);
+- per page: views by audience, split between the personalized and the default version;
+- where entries come from: `utm_source` (with campaign) or the referring site, and the audience they got;
+- **UTM used but not created in Payload**: `utm_source` / `utm_medium` / `utm_campaign` combinations seen on visits that match no saved UTM link (built by hand, by an ad platform or a partner), so you can create them and keep campaigns consistent.
+
+Views are recorded by the tracker, so add it to your pages (or root layout; it follows client-side navigation):
+
+```tsx
+import { PersonalizationTracker } from 'payload-plugin-utm/tracker'
+
+<PersonalizationTracker audience={audience?.key ?? null} variant={pageHasVariant} stats />
+```
+
+Each view is one row (day, audience, path, version shown; source, medium and campaign on entries) in a hidden `utm-personalization-views` collection: no identifier, no IP, no user agent, no cookie. The endpoint (`POST /api/utm-audiences/stats`) only accepts active audience keys and bounded labels; restrict it with `stats.allowedOrigins`. Rows older than `stats.retentionDays` (180) are deleted; the view aggregates up to `stats.reportLimit` (50 000) rows. Counts are page views, not unique visitors, and miss visitors who block the request.
+
 ### Measurement, privacy, SEO
 
-- `<PersonalizationTracker audience={key} />` from `payload-plugin-utm/tracker` pushes `{ event: 'utm_personalization', utm_audience }` to `window.dataLayer`. Nothing else is sent anywhere.
+- `<PersonalizationTracker audience={key} />` (`payload-plugin-utm/tracker`) pushes `{ event: 'utm_personalization', utm_audience, utm_variant }` to `window.dataLayer` (`dataLayer={false}` to skip) and dispatches a `utm:personalization` window event, so any analytics tool can listen, e.g. Vercel Analytics:
+
+  ```ts
+  window.addEventListener('utm:personalization', (e) => track('Personalized view', e.detail))
+  ```
+- **Lead forms**: `<SourceMemoryFields />` (`payload-plugin-utm/react`) renders hidden inputs with the visitor's first, latest and audience-selecting arrival (`first_utm_source`, `first_referrer`, `latest_at`…), or use `sourceMemoryFields(await getSourceMemory())`. These values come from the visitor's URL: store them as text, never as HTML.
 - The `utm_memory` cookie stores campaign parameters, referring domains and dates (no identifier, no IP). Personalization and attribution cookies usually require consent in the EU: use `consent: (request) => …` to read your consent cookie, or `cookie: false`. Without consent the memory is neither read nor written and only the landing request is personalized.
+- **Cookie declaration.** The plugin does not integrate with any consent manager: declare the cookie in yours (Axeptio, Didomi, Cookiebot, FlowConsent…) and wire `consent` to its decision.
+
+  | Name | Purpose | Duration | Type |
+  | --- | --- | --- | --- |
+  | `utm_memory` | Remembers the campaign or referring site a visitor arrived from, to keep showing the matching page version and to attribute leads | 90 days (`cookie.maxAgeSeconds`) | First-party, `httpOnly`, `SameSite=Lax`; personalization / measurement |
+
+  The statistics and the tracker set no cookie.
 - Crawlers request URLs without UTM parameters and therefore index the default content.
 - The manifest is public by default (it exposes keys and rule values, which already appear in your campaign URLs). Set `personalization.manifest.secret` (≥ 16 chars) to require a bearer token, and `manifest.tenantField` to serve one manifest per tenant via `?tenant=<id>`.
 

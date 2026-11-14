@@ -4,9 +4,10 @@
  * `<Personalized>` where the page should change.
  */
 import type { ReactNode } from "react";
-import { getActiveAudience } from "./next.js";
+import { getActiveAudience, getSourceMemory } from "./next.js";
 import {
   isValidAudienceKey,
+  sourceMemoryFields,
   type ActiveAudience,
 } from "./personalization/match.js";
 
@@ -73,4 +74,26 @@ export async function Personalized({
 }: PersonalizedProps) {
   const active = await currentAudience(audience);
   return <>{matchesAudienceKeys(active, { only, except }) ? children : fallback}</>;
+}
+
+/**
+ * Hidden inputs with the visitor's source memory (first, latest and
+ * audience-selecting arrival), for a lead form posted to your CRM.
+ * Server Component; renders nothing without memory or consent.
+ */
+export async function SourceMemoryFields({
+  prefix = "",
+}: {
+  /** Prepended to every input name, e.g. `utm_` → `utm_first_utm_source`. */
+  prefix?: string;
+}) {
+  const memory = await getSourceMemory();
+  const fields = sourceMemoryFields(memory);
+  return (
+    <>
+      {Object.entries(fields).map(([name, value]) => (
+        <input key={name} type="hidden" name={`${prefix}${name}`} value={value} />
+      ))}
+    </>
+  );
 }

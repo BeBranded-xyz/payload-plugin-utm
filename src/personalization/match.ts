@@ -954,3 +954,29 @@ export function audienceDraftFromLink(link: {
     conditions,
   };
 }
+
+/**
+ * Flat fields for a lead form or CRM (hidden inputs, HubSpot properties…):
+ * `first_utm_source`, `first_referrer`, `first_at`, `latest_…`, `audience_…`.
+ * Values come from the visitor's URL, so treat them as untrusted text.
+ */
+export function sourceMemoryFields(
+  memory: SourceMemory | null | undefined,
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  const slots = [
+    ["first", memory?.f],
+    ["latest", memory?.l],
+    ["audience", memory?.s],
+  ] as const;
+  for (const [prefix, touch] of slots) {
+    if (!touch) continue;
+    for (const [name, value] of Object.entries(touch.p ?? {}))
+      if (/^[A-Za-z0-9_.-]{1,64}$/.test(name))
+        fields[`${prefix}_${name}`] = value;
+    if (touch.r) fields[`${prefix}_referrer`] = touch.r;
+    if (Number.isFinite(touch.t))
+      fields[`${prefix}_at`] = new Date(touch.t * 1000).toISOString();
+  }
+  return fields;
+}

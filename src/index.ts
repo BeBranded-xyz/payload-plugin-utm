@@ -13,6 +13,8 @@ import { csvEndpoint } from "./csv-endpoint.js";
 import {
   addPersonalizationToBlocks,
   audiencesCollection,
+  statsSettings,
+  viewsCollection,
 } from "./personalization/collection.js";
 import type { UtmPluginOptions } from "./types.js";
 import {
@@ -37,6 +39,7 @@ export {
 } from "./personalization/collection.js";
 export * from "./personalization/match.js";
 export { getAudienceContent } from "./personalization/server.js";
+export * from "./personalization/stats.js";
 export type { PathResolver } from "./personalization/collection.js";
 export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
   return (config) => {
@@ -386,7 +389,15 @@ function withPersonalization(
       "utmPlugin: personalization.manifest.limit must be an integer between 1 and 5000.",
     );
   if (options.preview) {
-    const { siteUrl, param } = options.preview;
+    const { siteUrl, param, draftRoute } = options.preview;
+    if (
+      draftRoute !== undefined &&
+      (typeof draftRoute !== "string" ||
+        !/^\/[A-Za-z0-9][A-Za-z0-9/_-]*$/.test(draftRoute))
+    )
+      throw new Error(
+        "utmPlugin: personalization.preview.draftRoute must be a path such as /api/utm-preview.",
+      );
     if (
       siteUrl !== undefined &&
       (validateDestination(siteUrl) !== true ||
@@ -432,6 +443,45 @@ function withPersonalization(
     throw new Error(
       "utmPlugin: personalization.content.fields must be an array of fields.",
     );
+  const stats = statsSettings(options);
+  if (stats) {
+    if (!/^[a-z][a-z0-9-]*$/.test(stats.slug) || stats.slug === slug)
+      throw new Error(
+        "utmPlugin: personalization.stats.slug must be a distinct lowercase slug.",
+      );
+    if (config.collections?.some((c) => c.slug === stats.slug))
+      throw new Error(`utmPlugin: collection "${stats.slug}" already exists.`);
+    if (
+      !Number.isInteger(stats.retentionDays) ||
+      stats.retentionDays < 1 ||
+      stats.retentionDays > 3650
+    )
+      throw new Error(
+        "utmPlugin: personalization.stats.retentionDays must be an integer between 1 and 3650.",
+      );
+    if (
+      !Number.isInteger(stats.reportLimit) ||
+      stats.reportLimit < 100 ||
+      stats.reportLimit > 500_000
+    )
+      throw new Error(
+        "utmPlugin: personalization.stats.reportLimit must be an integer between 100 and 500000.",
+      );
+    if (
+      stats.allowedOrigins !== undefined &&
+      (!Array.isArray(stats.allowedOrigins) ||
+        stats.allowedOrigins.some((origin) => {
+          try {
+            return new URL(origin).origin !== origin;
+          } catch {
+            return true;
+          }
+        }))
+    )
+      throw new Error(
+        "utmPlugin: personalization.stats.allowedOrigins must be exact origins, e.g. https://example.com.",
+      );
+  }
   let audiences = audiencesCollection(slug, options, context);
   if (options.overrides) audiences = options.overrides(audiences);
   if (audiences.slug !== slug)
@@ -453,10 +503,15 @@ function withPersonalization(
         ? null
         : (options.preview?.param ?? "utm_preview"),
     siteUrl: options.preview ? options.preview.siteUrl : undefined,
+    draftRoute: options.preview ? options.preview.draftRoute : undefined,
   };
   const withCollection: Config = {
     ...config,
-    collections: [...(config.collections ?? []), audiences],
+    collections: [
+      ...(config.collections ?? []),
+      audiences,
+      ...(stats ? [viewsCollection(stats)] : []),
+    ],
   };
   const {
     config: result,
@@ -506,6 +561,8 @@ function withPersonalization(
                   ...ui,
                   audiencesSlug: slug,
                   linksSlug: context.linksSlug,
+                  statsSlug: stats?.slug ?? null,
+                  statsLimit: stats?.reportLimit ?? null,
                   targets,
                   blockLabels,
                 },

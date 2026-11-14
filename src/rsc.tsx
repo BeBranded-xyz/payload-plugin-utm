@@ -18,13 +18,25 @@ import {
   type PersonalizedBlock,
   type SimulatedDocument,
 } from "./personalization/match.js";
+import {
+  DEFAULT_AUDIENCE,
+  dayOf,
+  summarizeViews,
+  unregisteredCampaigns,
+  type StatsSummary,
+  type UnregisteredCampaign,
+  type ViewRecord,
+} from "./personalization/stats.js";
 
 type PluginViewOptions = {
   locale: "en" | "fr";
   previewParam: string | null;
   siteUrl?: string;
+  draftRoute?: string;
   audiencesSlug: string;
   linksSlug: string;
+  statsSlug?: string | null;
+  statsLimit?: number | null;
   targets: PersonalizationTarget[];
   blockLabels: Record<string, unknown>;
 };
@@ -108,6 +120,67 @@ const t = {
 };
 
 const DOC_LIMIT = 200;
+
+const statsText = {
+  en: {
+    title: "Statistics",
+    period: (d: number) => `Last ${d} days`,
+    off: "Statistics are off. Enable personalization.stats and add <PersonalizationTracker stats /> to your pages.",
+    empty: "No view recorded in this period.",
+    views: "Page views",
+    entries: "Entries",
+    variantViews: "Personalized views",
+    audience: "Audience",
+    page: "Page",
+    shown: "Version shown",
+    personalized: "personalized",
+    default: "default",
+    everyone: "No audience",
+    sources: "Where entries come from",
+    source: "Source (utm_source or site)",
+    medium: "Medium",
+    campaign: "Campaign",
+    capped: (n: number) =>
+      `Only the latest ${n} views were aggregated; narrow the period.`,
+    unregistered: "UTM used but not created in Payload",
+    unregisteredHint:
+      "Campaign parameters seen on visits that match no UTM link saved here (built by hand, by an ad platform or a partner). Create them as UTM links to keep campaigns consistent.",
+    noneUnregistered: "Every UTM seen in this period matches a saved link.",
+    seen: "Seen",
+    createLink: "Create a UTM link",
+    days: "Per day",
+  },
+  fr: {
+    title: "Statistiques",
+    period: (d: number) => `${d} derniers jours`,
+    off: "Les statistiques sont désactivées. Activez personalization.stats et ajoutez <PersonalizationTracker stats /> à vos pages.",
+    empty: "Aucune vue enregistrée sur cette période.",
+    views: "Pages vues",
+    entries: "Arrivées",
+    variantViews: "Vues personnalisées",
+    audience: "Audience",
+    page: "Page",
+    shown: "Version vue",
+    personalized: "personnalisée",
+    default: "par défaut",
+    everyone: "Sans audience",
+    sources: "D’où viennent les arrivées",
+    source: "Source (utm_source ou site)",
+    medium: "Support",
+    campaign: "Campagne",
+    capped: (n: number) =>
+      `Seules les ${n} dernières vues ont été agrégées ; réduisez la période.`,
+    unregistered: "UTM utilisés mais non créés dans Payload",
+    unregisteredHint:
+      "Paramètres de campagne vus sur des visites et qui ne correspondent à aucun lien UTM enregistré ici (créés à la main, par une régie publicitaire ou un partenaire). Créez-les en liens UTM pour garder des campagnes cohérentes.",
+    noneUnregistered:
+      "Tous les UTM vus sur cette période correspondent à un lien enregistré.",
+    seen: "Vu",
+    createLink: "Créer un lien UTM",
+    days: "Par jour",
+  },
+};
+const PERIODS = [7, 30, 90] as const;
 
 type DocRow = {
   id: string;
@@ -328,6 +401,66 @@ export async function PersonalizationView(
     }),
   );
 
+  // Statistics (opt-in): anonymous page views recorded by the tracker.
+  const periodParam = Number(
+    (searchParams as Record<string, unknown> | undefined)?.days,
+  );
+  const period = (PERIODS as readonly number[]).includes(periodParam)
+    ? periodParam
+    : 30;
+  let stats: StatsSummary | null = null;
+  let unregistered: UnregisteredCampaign[] = [];
+  let statsCapped = false;
+  if (options.statsSlug && req.user) {
+    try {
+      const limit = options.statsLimit ?? 50_000;
+      const since = dayOf(new Date(now.getTime() - (period - 1) * 86_400_000));
+      const result = await payload.find({
+        collection: options.statsSlug as CollectionSlug,
+        req,
+        overrideAccess: false,
+        depth: 0,
+        limit,
+        sort: "-day",
+        where: { day: { greater_than_equal: since } },
+        select: {
+          day: true,
+          audience: true,
+          path: true,
+          variant: true,
+          entry: true,
+          utm: true,
+          source: true,
+          medium: true,
+          campaign: true,
+        } as never,
+      });
+      statsCapped = result.hasNextPage;
+      const rows = result.docs as Partial<ViewRecord>[];
+      stats = summarizeViews(rows);
+      const allLinks = await payload.find({
+        collection: options.linksSlug as CollectionSlug,
+        req,
+        overrideAccess: false,
+        depth: 0,
+        limit: 5000,
+        pagination: false,
+        select: { source: true, medium: true, campaign: true } as never,
+      });
+      unregistered = unregisteredCampaigns(
+        rows,
+        allLinks.docs as Record<string, unknown>[],
+      );
+    } catch {
+      notes.push(text.unreadable(options.statsSlug));
+    }
+  }
+  const st = statsText[options.locale];
+  const audienceName = (key: string) =>
+    key === DEFAULT_AUDIENCE
+      ? st.everyone
+      : (audiences.find((a) => a.key === key)?.title ?? key);
+
   const cell = {
     padding: "8px 12px",
     borderBottom: "1px solid var(--theme-elevation-100)",
@@ -437,6 +570,185 @@ export async function PersonalizationView(
           </div>
         )}
 
+        <h2 style={{ marginTop: 32 }}>{st.title}</h2>
+        {!options.statsSlug ? (
+          <p style={{ color: "var(--theme-elevation-600)" }}>{st.off}</p>
+        ) : (
+          <>
+            <p style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {PERIODS.map((d) =>
+                d === period ? (
+                  <strong key={d}>{st.period(d)}</strong>
+                ) : (
+                  <a key={d} href={`?days=${d}`}>
+                    {st.period(d)}
+                  </a>
+                ),
+              )}
+            </p>
+            {statsCapped && (
+              <p style={{ color: "var(--theme-elevation-600)" }}>
+                {st.capped(options.statsLimit ?? 50_000)}
+              </p>
+            )}
+            {!stats || stats.total.views === 0 ? (
+              <p>{st.empty}</p>
+            ) : (
+              <>
+                <p style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
+                  <span>
+                    <strong style={{ fontSize: 24 }}>{stats.total.entries}</strong>{" "}
+                    {st.entries}
+                  </span>
+                  <span>
+                    <strong style={{ fontSize: 24 }}>{stats.total.views}</strong>{" "}
+                    {st.views}
+                  </span>
+                  <span>
+                    <strong style={{ fontSize: 24 }}>
+                      {stats.total.variantViews}
+                    </strong>{" "}
+                    {st.variantViews}
+                  </span>
+                </p>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ textAlign: "left" }}>
+                        <th style={cell}>{st.audience}</th>
+                        <th style={cell}>{st.entries}</th>
+                        <th style={cell}>{st.views}</th>
+                        <th style={cell}>{st.variantViews}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.audiences.map((row) => (
+                        <tr key={row.audience}>
+                          <td style={cell}>{audienceName(row.audience)}</td>
+                          <td style={cell}>{row.entries}</td>
+                          <td style={cell}>{row.views}</td>
+                          <td style={cell}>
+                            {row.audience === DEFAULT_AUDIENCE
+                              ? "—"
+                              : row.variantViews}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <h3 style={{ marginTop: 24 }}>{st.page}</h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ textAlign: "left" }}>
+                        <th style={cell}>{st.page}</th>
+                        <th style={cell}>{st.audience}</th>
+                        <th style={cell}>{st.views}</th>
+                        <th style={cell}>{st.shown}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.pages.map((row) => (
+                        <tr key={`${row.path}|${row.audience}`}>
+                          <td style={cell}>
+                            <code>{row.path}</code>
+                          </td>
+                          <td style={cell}>{audienceName(row.audience)}</td>
+                          <td style={cell}>{row.views}</td>
+                          <td style={cell}>
+                            {row.variantViews > 0
+                              ? `${row.variantViews} ${st.personalized}`
+                              : ""}
+                            {row.variantViews > 0 &&
+                            row.views > row.variantViews
+                              ? " · "
+                              : ""}
+                            {row.views > row.variantViews
+                              ? `${row.views - row.variantViews} ${st.default}`
+                              : ""}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <h3 style={{ marginTop: 24 }}>{st.sources}</h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ textAlign: "left" }}>
+                        <th style={cell}>{st.source}</th>
+                        <th style={cell}>{st.campaign}</th>
+                        <th style={cell}>{st.audience}</th>
+                        <th style={cell}>{st.entries}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.sources.map((row) => (
+                        <tr
+                          key={`${row.source}|${row.campaign}|${row.audience}`}
+                        >
+                          <td style={cell}>{row.source}</td>
+                          <td style={cell}>{row.campaign ?? "—"}</td>
+                          <td style={cell}>{audienceName(row.audience)}</td>
+                          <td style={cell}>{row.entries}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            <h3 style={{ marginTop: 24 }}>{st.unregistered}</h3>
+            <p style={{ color: "var(--theme-elevation-600)" }}>
+              {st.unregisteredHint}
+            </p>
+            {unregistered.length === 0 ? (
+              <p>✓ {st.noneUnregistered}</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left" }}>
+                      <th style={cell}>utm_source</th>
+                      <th style={cell}>utm_medium</th>
+                      <th style={cell}>utm_campaign</th>
+                      <th style={cell}>{st.entries}</th>
+                      <th style={cell}>{st.seen}</th>
+                      <th style={cell}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unregistered.map((row) => (
+                      <tr
+                        key={`${row.source}|${row.medium}|${row.campaign}`}
+                      >
+                        <td style={cell}>⚠ {row.source}</td>
+                        <td style={cell}>{row.medium ?? "—"}</td>
+                        <td style={cell}>{row.campaign ?? "—"}</td>
+                        <td style={cell}>{row.entries}</td>
+                        <td style={cell}>
+                          {row.firstDay === row.lastDay
+                            ? row.firstDay
+                            : `${row.firstDay} → ${row.lastDay}`}
+                        </td>
+                        <td style={cell}>
+                          <a
+                            href={`${admin}/collections/${options.linksSlug}/create`}
+                          >
+                            {st.createLink}
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+
         <h2 style={{ marginTop: 32 }}>{text.alerts}</h2>
         {alerts.length === 0 && notes.length === 0 ? (
           <p>✓ {text.allGood}</p>
@@ -462,6 +774,7 @@ export async function PersonalizationView(
           documents={simulated}
           previewParam={options.previewParam}
           siteUrl={options.siteUrl}
+          draftRoute={options.draftRoute}
           titles={Object.fromEntries(
             audiences.map((a) => [a.key, a.title ?? a.key]),
           )}

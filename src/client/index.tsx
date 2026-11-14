@@ -237,12 +237,14 @@ type AudiencePreviewProps = {
   locale?: "en" | "fr";
   siteUrl?: string;
   param?: string;
+  draftRoute?: string;
   linksSlug?: string;
 };
 export function AudiencePreview({
   locale = "en",
   siteUrl,
   param = "utm_preview",
+  draftRoute,
   linksSlug = "utm-links",
 }: AudiencePreviewProps) {
   const text = audienceMessages[locale];
@@ -286,7 +288,7 @@ export function AudiencePreview({
   }, [form.conditions, form.match]);
   const cleanPath = "/" + path.trim().replace(/^\/+/, "");
   const url = (key: string) =>
-    `${origin}${cleanPath}${cleanPath.includes("?") ? "&" : "?"}${encodeURIComponent(param)}=${encodeURIComponent(key)}`;
+    previewHref(origin, cleanPath, param, key, draftRoute);
   return (
     <div className="field-type" style={{ display: "grid", gap: 8 }}>
       <FieldLabel label={locale === "fr" ? "Aperçu" : "Preview"} />
@@ -776,8 +778,11 @@ function previewHref(
   path: string,
   param: string,
   key: string,
+  draftRoute?: string,
 ): string {
   const clean = "/" + path.trim().replace(/^\/+/, "");
+  if (draftRoute)
+    return `${origin}${draftRoute}?path=${encodeURIComponent(clean)}&${encodeURIComponent(param)}=${encodeURIComponent(key)}`;
   return `${origin}${clean}${clean.includes("?") ? "&" : "?"}${encodeURIComponent(param)}=${encodeURIComponent(key)}`;
 }
 
@@ -794,6 +799,7 @@ type PanelProps = {
   audiencesSlug?: string;
   previewParam?: string | null;
   siteUrl?: string;
+  draftRoute?: string;
   blockLabels?: Record<string, unknown>;
   fieldName?: string;
 };
@@ -804,6 +810,7 @@ export function PersonalizationPanel({
   audiencesSlug = "utm-audiences",
   previewParam = "utm_preview",
   siteUrl,
+  draftRoute,
   blockLabels = {},
   fieldName = "personalization",
 }: PanelProps) {
@@ -848,7 +855,13 @@ export function PersonalizationPanel({
           </span>
           {previewParam && (
             <a
-              href={previewHref(origin, pagePath, previewParam, item.key)}
+              href={previewHref(
+                origin,
+                pagePath,
+                previewParam,
+                item.key,
+                draftRoute,
+              )}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -864,7 +877,13 @@ export function PersonalizationPanel({
           >
             <span>{text.defaultVisitor}</span>
             <a
-              href={previewHref(origin, pagePath, previewParam, "default")}
+              href={previewHref(
+                origin,
+                pagePath,
+                previewParam,
+                "default",
+                draftRoute,
+              )}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -1137,6 +1156,7 @@ type SimulatorProps = {
   documents: (SimulatedDocument & { href?: string })[];
   previewParam?: string | null;
   siteUrl?: string;
+  draftRoute?: string;
   titles?: Record<string, string>;
 };
 
@@ -1147,6 +1167,7 @@ export function PersonalizationSimulator({
   documents,
   previewParam = "utm_preview",
   siteUrl,
+  draftRoute,
   titles = {},
 }: SimulatorProps) {
   const text = editorMessages[locale];
@@ -1178,6 +1199,7 @@ export function PersonalizationSimulator({
         parsed.pathname,
         previewParam,
         result.audience?.key ?? "default",
+        draftRoute,
       );
     } catch {
       previewUrl = null;

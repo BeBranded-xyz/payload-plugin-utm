@@ -354,6 +354,7 @@ export {
   AUDIENCE_ID_HEADER,
   SOURCE_MEMORY_HEADER,
   fillAudienceTokens,
+  sourceMemoryFields,
   filterPersonalizedBlocks,
   isVisibleForAudience,
 } from "./personalization/match.js";

@@ -17,10 +17,13 @@ import {
   normalizeHost,
   parseAudienceManifest,
 } from "./match.js";
+import { dayOf, parseViewEvent } from "./stats.js";
 
 /** Public path(s) of a document, or null when it is not routable. */
 export type PathResolver = (args: {
   doc: Record<string, unknown>;
+  /** Locale the document was read in, when localization is enabled (one call per locale). */
+  locale?: string;
 }) => string | readonly string[] | null | undefined;
 
 export type PersonalizationOptions = {
@@ -46,8 +49,31 @@ export type PersonalizationOptions = {
     previousDoc?: Record<string, unknown>;
     req: PayloadRequest;
   }) => void | Promise<void>;
-  /** Preview links in the admin. Must match the middleware `previewParam`. */
-  preview?: false | { siteUrl?: string; param?: string };
+  /**
+   * Preview links in the admin. `param` must match the middleware `previewParam`.
+   * `draftRoute`: path of a `createDraftPreviewRoute()` handler on the site,
+   * so previews show unsaved drafts (Next.js draft mode) instead of the published page.
+   */
+  preview?:
+    | false
+    | { siteUrl?: string; param?: string; draftRoute?: `/${string}` };
+  /**
+   * Anonymous view statistics in the Personalization view (page views per
+   * audience, page version shown, entry sources). Recorded only by
+   * `<PersonalizationTracker stats />`. Off by default.
+   */
+  stats?:
+    | boolean
+    | {
+        /** Collection storing views, default `utm-personalization-views`. */
+        slug?: string;
+        /** Views older than this are deleted, default 180 days. */
+        retentionDays?: number;
+        /** Accepted `Origin` headers (exact origins). Default: any. */
+        allowedOrigins?: string[];
+        /** Max rows aggregated by the admin view, default 50 000. */
+        reportLimit?: number;
+      };
   /**
    * Admin overview at `/admin/personalization` (audiences × documents × links,
    * consistency alerts, URL simulator). `false` disables the view and its nav link.
@@ -238,6 +264,7 @@ export type PersonalizationUi = {
   locale: "en" | "fr";
   previewParam: string | null;
   siteUrl?: string;
+  draftRoute?: string;
 };
 
 export type PersonalizationTarget = {
@@ -375,6 +402,7 @@ export function addPersonalizationToBlocks(
                     audiencesSlug,
                     previewParam: ui.previewParam,
                     siteUrl: ui.siteUrl,
+                    draftRoute: ui.draftRoute,
                     blockLabels,
                   },
                 },
@@ -414,12 +442,20 @@ async function audiencePaths(
   tenantWhere: Where | undefined,
 ): Promise<Map<string, Set<string>> | null> {
   const byAudience = new Map<string, Set<string>>();
-  const add = (doc: Record<string, unknown>, resolve: PathResolver) => {
+  const localization = req.payload.config?.localization;
+  const locales: (string | undefined)[] = localization
+    ? localization.localeCodes
+    : [undefined];
+  const add = (
+    doc: Record<string, unknown>,
+    resolve: PathResolver,
+    locale: string | undefined,
+  ) => {
     const blocks = collectPersonalizedBlocks(doc).filter(
       (block) => block.mode !== "all",
     );
     if (!blocks.length) return;
-    const resolved = resolve({ doc });
+    const resolved = resolve(locale ? { doc, locale } : { doc });
     const list = (Array.isArray(resolved) ? resolved : [resolved]).filter(
       (path): path is string =>
         typeof path === "string" && path.startsWith("/"),
@@ -432,30 +468,39 @@ async function audiencePaths(
       }
   };
   try {
-    for (const [collection, resolve] of Object.entries(
-      paths.collections ?? {},
-    )) {
-      const result = await req.payload.find({
-        collection: collection as CollectionSlug,
-        overrideAccess: true,
-        depth: 0,
-        limit: paths.limit ?? 2000,
-        ...(tenantWhere ? { where: tenantWhere } : {}),
-      });
-      if (result.hasNextPage) return null;
-      result.docs.forEach((doc) =>
-        add(doc as Record<string, unknown>, resolve),
-      );
-    }
-    for (const [global, resolve] of Object.entries(paths.globals ?? {}))
-      add(
-        (await req.payload.findGlobal({
-          slug: global as never,
+    // Localized layouts differ per locale: read and resolve each locale separately.
+    for (const locale of locales) {
+      const localeArgs = locale
+        ? { locale: locale as never, fallbackLocale: false as never }
+        : {};
+      for (const [collection, resolve] of Object.entries(
+        paths.collections ?? {},
+      )) {
+        const result = await req.payload.find({
+          collection: collection as CollectionSlug,
           overrideAccess: true,
           depth: 0,
-        })) as Record<string, unknown>,
-        resolve,
-      );
+          limit: paths.limit ?? 2000,
+          ...localeArgs,
+          ...(tenantWhere ? { where: tenantWhere } : {}),
+        });
+        if (result.hasNextPage) return null;
+        result.docs.forEach((doc) =>
+          add(doc as Record<string, unknown>, resolve, locale),
+        );
+      }
+      for (const [global, resolve] of Object.entries(paths.globals ?? {}))
+        add(
+          (await req.payload.findGlobal({
+            slug: global as never,
+            overrideAccess: true,
+            depth: 0,
+            ...localeArgs,
+          })) as Record<string, unknown>,
+          resolve,
+          locale,
+        );
+    }
   } catch (error) {
     // Incomplete knowledge must not hide variants: fall back to rewriting every path.
     req.payload.logger.error({
@@ -818,6 +863,9 @@ export function audiencesCollection(
                       locale: context.locale,
                       siteUrl: options.preview?.siteUrl,
                       param: options.preview?.param ?? "utm_preview",
+                      ...(options.preview?.draftRoute
+                        ? { draftRoute: options.preview.draftRoute }
+                        : {}),
                       linksSlug: context.linksSlug,
                     },
                   },
@@ -839,12 +887,14 @@ export function audiencesCollection(
           {
             name: "displayName",
             type: "text",
+            localized: true,
             maxLength: 120,
             label: { en: "Display name", fr: "Nom affiché" },
           },
           {
             name: "tagline",
             type: "textarea",
+            localized: true,
             maxLength: 500,
             label: { en: "Tagline", fr: "Accroche" },
           },
@@ -880,6 +930,150 @@ export function audiencesCollection(
         },
       ],
     },
-    endpoints: [manifestEndpoint(slug, options.manifest, options.paths)],
+    endpoints: [
+      manifestEndpoint(slug, options.manifest, options.paths),
+      ...(statsSettings(options)
+        ? [statsEndpoint(slug, statsSettings(options)!)]
+        : []),
+    ],
+  };
+}
+
+export type StatsSettings = {
+  slug: string;
+  retentionDays: number;
+  allowedOrigins?: string[];
+  reportLimit: number;
+};
+
+export function statsSettings(
+  options: PersonalizationOptions,
+): StatsSettings | null {
+  if (!options.stats) return null;
+  const custom = options.stats === true ? {} : options.stats;
+  return {
+    slug: custom.slug ?? "utm-personalization-views",
+    retentionDays: custom.retentionDays ?? 180,
+    allowedOrigins: custom.allowedOrigins,
+    reportLimit: custom.reportLimit ?? 50_000,
+  };
+}
+
+/** Stored page views. Written only by the stats endpoint, never by the API. */
+export function viewsCollection(settings: StatsSettings): CollectionConfig {
+  const authenticated = ({ req }: { req: PayloadRequest }) =>
+    Boolean(req.user);
+  const text = (name: string, index = false): Field => ({
+    name,
+    type: "text",
+    index,
+    maxLength: 300,
+  });
+  return {
+    slug: settings.slug,
+    labels: {
+      singular: { en: "Personalization view", fr: "Vue personnalisée" },
+      plural: { en: "Personalization views", fr: "Vues personnalisées" },
+    },
+    admin: { group: "Marketing", hidden: true, useAsTitle: "path" },
+    access: {
+      read: authenticated,
+      create: () => false,
+      update: () => false,
+      delete: authenticated,
+    },
+    timestamps: false,
+    fields: [
+      { ...text("day", true), required: true } as Field,
+      { ...text("audience", true), required: true } as Field,
+      { ...text("path", true), required: true } as Field,
+      { name: "variant", type: "checkbox", defaultValue: false },
+      { name: "entry", type: "checkbox", defaultValue: false, index: true },
+      { name: "utm", type: "checkbox", defaultValue: false },
+      text("source"),
+      text("medium"),
+      text("campaign"),
+    ],
+  };
+}
+
+let knownKeys: { keys: Set<string>; expires: number; slug: string } | null =
+  null;
+
+function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint {
+  return {
+    path: "/stats",
+    method: "post",
+    handler: async (req) => {
+      const origin = req.headers.get("origin");
+      if (
+        settings.allowedOrigins &&
+        (!origin || !settings.allowedOrigins.includes(origin))
+      )
+        return new Response(null, { status: 403 });
+      // sendBeacon posts text/plain (no CORS preflight); cap the body.
+      const body = (await req.text?.()) ?? "";
+      if (!body || body.length > 2048)
+        return new Response(null, { status: 400 });
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return new Response(null, { status: 400 });
+      }
+      try {
+        if (
+          !knownKeys ||
+          knownKeys.expires < Date.now() ||
+          knownKeys.slug !== audiencesSlug
+        ) {
+          const result = await req.payload.find({
+            collection: audiencesSlug as CollectionSlug,
+            overrideAccess: true,
+            depth: 0,
+            limit: 5000,
+            pagination: false,
+            where: { state: { equals: "active" } },
+            select: { key: true },
+          });
+          knownKeys = {
+            slug: audiencesSlug,
+            expires: Date.now() + 60_000,
+            keys: new Set(
+              (result.docs as { key?: unknown }[])
+                .map((doc) => doc.key)
+                .filter((key): key is string => typeof key === "string"),
+            ),
+          };
+        }
+        const event = parseViewEvent(parsed, knownKeys.keys);
+        if (!event) return new Response(null, { status: 400 });
+        const now = new Date();
+        await req.payload.create({
+          collection: settings.slug as CollectionSlug,
+          overrideAccess: true,
+          depth: 0,
+          data: { ...event, day: dayOf(now) } as never,
+        });
+        // Retention, amortized over writes.
+        if (Math.random() < 0.01) {
+          const cutoff = dayOf(
+            new Date(now.getTime() - settings.retentionDays * 86_400_000),
+          );
+          await req.payload.delete({
+            collection: settings.slug as CollectionSlug,
+            overrideAccess: true,
+            where: { day: { less_than: cutoff } },
+          });
+        }
+      } catch (error) {
+        req.payload.logger.error({
+          err: error,
+          msg: "utmPlugin: personalization view not recorded",
+        });
+        return new Response(null, { status: 500 });
+      }
+      return new Response(null, { status: 204 });
+    },
   };
 }
