@@ -143,6 +143,24 @@ export function findAudience(
   return audience ? { key: audience.key, id: audience.id } : null;
 }
 
+/** Map a stored audience document (admin shape) to manifest input. */
+export function audienceDocToRule(doc: Record<string, unknown>): unknown {
+  return {
+    id: doc.id,
+    key: doc.key,
+    priority: doc.priority,
+    match: doc.match,
+    conditions: Array.isArray(doc.conditions)
+      ? doc.conditions.map((c: Record<string, unknown>) => ({
+          parameter:
+            c?.parameter === "custom" ? c.customParameter : c?.parameter,
+          operator: c?.operator,
+          value: c?.value,
+        }))
+      : [],
+  };
+}
+
 /** Defensive parser: drops malformed entries instead of throwing. */
 export function parseAudienceManifest(input: unknown): AudienceManifest {
   const empty: AudienceManifest = { version: 1, audiences: [] };
@@ -244,4 +262,25 @@ export function filterPersonalizedBlocks<T>(
       audience,
     ),
   );
+}
+
+/** Query string that satisfies the audience's conditions, when one can be inferred. */
+export function exampleCampaignQuery(
+  conditions: { parameter: string; operator: string; value?: string | null }[],
+  match: "all" | "any" = "all",
+): string {
+  const params = new URLSearchParams();
+  const usable = conditions.filter((c) =>
+    ["equals", "in", "startsWith", "contains", "exists"].includes(c.operator),
+  );
+  for (const c of match === "any" ? usable.slice(0, 1) : usable) {
+    const value =
+      c.operator === "exists"
+        ? "1"
+        : c.operator === "in"
+          ? (c.value ?? "").split(",")[0]!.trim()
+          : (c.value ?? "").trim();
+    if (c.parameter && value) params.set(c.parameter, value);
+  }
+  return params.toString();
 }

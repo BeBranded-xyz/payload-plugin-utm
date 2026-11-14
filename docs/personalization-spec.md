@@ -56,6 +56,13 @@ Editors place "Hero Restaurant A" (`only` → restaurant-a) next to the default 
 - The cookie stores only an audience key. Depending on jurisdiction it may need consent: `consent(request)` gate and `cookie: false` (landing-page-only personalization) are provided.
 - Search engines crawl URLs without UTM → default content. Rewritten variant routes should emit the public canonical.
 
+## Added before release
+
+- Next.js 16 `proxy.ts` (Node.js runtime; the module-level manifest cache then persists across requests).
+- `afterAudienceChange` hook + `revalidatePersonalizedRoutes()` (revalidates the rewrite prefix as a layout).
+- Preview: `?utm_preview=<key|default>` forces an audience for one request without touching the cookie; admin panel with path input, example campaign parameters and a link to the targeting UTM links.
+- UTM links: optional `audience` relationship and a sidebar check that resolves the link's parameters against active audiences (priorities included) via the authenticated REST API, so it works even when the manifest is secret.
+
 ## Out of scope (next)
 
-Referrer / geo / language conditions; linking a saved UTM link to an audience from the inventory; admin preview button; Edge Config adapter; percentage A/B within an audience.
+Referrer / geo / language conditions; Edge Config adapter; percentage A/B within an audience.

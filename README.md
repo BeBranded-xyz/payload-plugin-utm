@@ -136,18 +136,22 @@ This adds **Marketing → Campaign audiences** and a **Personalization** group t
 
 ### 2. Add the middleware
 
+Next.js 16 (`proxy.ts`, always on the Node.js runtime):
+
 ```ts
-// middleware.ts (proxy.ts on Next 16)
+// proxy.ts
 import { createPersonalizationMiddleware } from 'payload-plugin-utm/next'
 
-export const middleware = createPersonalizationMiddleware()
+export const proxy = createPersonalizationMiddleware()
 
 export const config = { matcher: ['/((?!api|admin|_next|.*\\..*).*)'] }
 ```
 
+Next.js 15: same code in `middleware.ts`, exported as `middleware` instead of `proxy`.
+
 It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). When the URL carries campaign parameters it picks the matching audience (last touch) and remembers it in an `httpOnly` cookie for 30 days; otherwise it reuses that cookie. Only keys that exist in the manifest are ever forwarded.
 
-Options: `manifestUrl` (absolute, for a separate CMS), `loadManifest` (Edge Config, KV, static JSON…), `secret` (paired with `personalization.manifest.secret`), `cacheTtlSeconds`, `cookie: false | { name, maxAgeSeconds }`, `consent: (request) => boolean`, `rewrite`.
+Options: `manifestUrl` (absolute, for a separate CMS), `loadManifest` (Edge Config, KV, static JSON…), `secret` (paired with `personalization.manifest.secret`), `cacheTtlSeconds`, `cookie: false | { name, maxAgeSeconds }`, `consent: (request) => boolean`, `rewrite`, `previewParam` (default `utm_preview`, `false` to disable).
 
 ### 3. Render
 
@@ -161,6 +165,27 @@ const blocks = filterPersonalizedBlocks(page.layout, audience)
 ```
 
 **Static pages**: `createPersonalizationMiddleware({ rewrite: { prefix: 'utm-audience' } })` rewrites `/menu?utm_source=…` to `/utm-audience/<key>/menu`, so each audience variant is cached like any static page. Add a route such as `app/(site)/utm-audience/[audience]/[[...slug]]/page.tsx` that renders the same page with `filterPersonalizedBlocks(page.layout, audienceFromParam(params.audience))`, and emit the public URL as canonical. Visitors without an audience keep the normal route; direct visits to the prefix are redirected (308). In this mode, query with `depth ≥ 1` so audiences are populated with their `key`.
+
+**Keeping static variants fresh.** Your pages' existing `revalidatePath('/menu')` hooks do not reach `/utm-audience/<key>/menu`. Call `revalidatePersonalizedRoutes()` (from `payload-plugin-utm/next`) next to them, and when audiences change:
+
+```ts
+import { revalidatePersonalizedRoutes } from 'payload-plugin-utm/next'
+
+utmPlugin({
+  personalization: {
+    blocks: ['hero'],
+    afterAudienceChange: () => revalidatePersonalizedRoutes(),
+  },
+})
+```
+
+It invalidates every route under the prefix; variants are regenerated on their next visit. Errors thrown by `afterAudienceChange` (e.g. when a seed script runs outside Next.js) are logged and never fail the save.
+
+### Preview and campaign links
+
+- Each audience has an **Aperçu / Preview** panel: enter a page path and open it as that audience or as the default visitor. It uses `?utm_preview=<key>` (or `default`), which the middleware honours for that request only, without changing the visitor's cookie. Set `personalization.preview: { siteUrl: 'https://www.example.com' }` when the admin is on another origin, `preview.param` if you renamed `previewParam`, or `preview: false` to hide it. Anyone can use the parameter; it only shows content that is already public.
+- The panel also suggests the campaign parameters that trigger the audience and links to the UTM links that target it.
+- With personalization on, **UTM links** get an optional *Personalized audience* field. The sidebar tells editors which audience the link will actually trigger (priorities included) and warns when it does not trigger the selected one or when that audience is archived.
 
 ### Measurement, privacy, SEO
 

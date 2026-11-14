@@ -1,5 +1,14 @@
-import type { CollectionConfig, Config, Field, Plugin } from "payload";
-import type { PersonalizationOptions } from "./personalization/collection.js";
+import type {
+  CollectionConfig,
+  CollectionSlug,
+  Config,
+  Field,
+  Plugin,
+} from "payload";
+import type {
+  AudienceCollectionContext,
+  PersonalizationOptions,
+} from "./personalization/collection.js";
 import { csvEndpoint } from "./csv-endpoint.js";
 import {
   addPersonalizationToBlocks,
@@ -246,6 +255,50 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
       endpoints:
         options.csvExport === false ? [] : [csvEndpoint(slug, maxRows)],
     };
+    if (options.personalization) {
+      const audiencesSlug =
+        options.personalization.audiencesSlug ?? "utm-audiences";
+      collection = {
+        ...collection,
+        fields: [
+          ...collection.fields,
+          {
+            name: "audience",
+            type: "relationship",
+            relationTo: audiencesSlug as CollectionSlug,
+            index: true,
+            label: {
+              en: "Personalized audience",
+              fr: "Audience personnalisée",
+            },
+            admin: {
+              position: "sidebar",
+              description: {
+                en: "Optional: the audience this link is meant to trigger.",
+                fr: "Facultatif : l’audience que ce lien doit déclencher.",
+              },
+            },
+          } as Field,
+          {
+            name: "audienceCheck",
+            type: "ui",
+            admin: {
+              position: "sidebar",
+              components: {
+                Field: {
+                  path: "payload-plugin-utm/client#AudienceMatchNotice",
+                  clientProps: {
+                    locale: options.locale ?? "en",
+                    audiencesSlug,
+                    policy,
+                  },
+                },
+              },
+            },
+          } as Field,
+        ],
+      };
+    }
     if (options.overrides) collection = options.overrides(collection);
     if (collection.slug !== slug)
       throw new Error(
@@ -285,13 +338,17 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
       collections: [...(config.collections ?? []), collection],
     };
     return options.personalization
-      ? withPersonalization(result, options.personalization)
+      ? withPersonalization(result, options.personalization, {
+          locale: options.locale ?? "en",
+          linksSlug: slug,
+        })
       : result;
   };
 }
 function withPersonalization(
   config: Config,
   options: PersonalizationOptions,
+  context: AudienceCollectionContext,
 ): Config {
   const slug = options.audiencesSlug ?? "utm-audiences";
   if (!/^[a-z][a-z0-9-]*$/.test(slug))
@@ -326,7 +383,29 @@ function withPersonalization(
     throw new Error(
       "utmPlugin: personalization.manifest.limit must be an integer between 1 and 5000.",
     );
-  let audiences = audiencesCollection(slug, options);
+  if (options.preview) {
+    const { siteUrl, param } = options.preview;
+    if (
+      siteUrl !== undefined &&
+      (validateDestination(siteUrl) !== true ||
+        new URL(siteUrl).origin !== siteUrl)
+    )
+      throw new Error(
+        "utmPlugin: personalization.preview.siteUrl must be an exact origin, e.g. https://example.com.",
+      );
+    if (param !== undefined && !/^[A-Za-z0-9_.-]{1,64}$/.test(param))
+      throw new Error(
+        "utmPlugin: personalization.preview.param must be a URL parameter name.",
+      );
+  }
+  if (
+    options.afterAudienceChange !== undefined &&
+    typeof options.afterAudienceChange !== "function"
+  )
+    throw new Error(
+      "utmPlugin: personalization.afterAudienceChange must be a function.",
+    );
+  let audiences = audiencesCollection(slug, options, context);
   if (options.overrides) audiences = options.overrides(audiences);
   if (audiences.slug !== slug)
     throw new Error(

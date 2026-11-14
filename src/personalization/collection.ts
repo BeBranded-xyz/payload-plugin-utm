@@ -5,10 +5,12 @@ import type {
   Config,
   Endpoint,
   Field,
+  PayloadRequest,
   Where,
 } from "payload";
 import { utmParameters } from "../utilities.js";
 import {
+  audienceDocToRule,
   audienceOperators,
   isValidAudienceKey,
   parseAudienceManifest,
@@ -27,7 +29,23 @@ export type PersonalizationOptions = {
     /** Max audiences published, default 500. */
     limit?: number;
   };
+  /**
+   * Called after an audience is created, updated or deleted, e.g. to call
+   * `revalidatePersonalizedRoutes()` in static (rewrite) mode. Errors are logged, never thrown.
+   */
+  afterAudienceChange?: (args: {
+    operation: "create" | "update" | "delete";
+    doc: Record<string, unknown>;
+    previousDoc?: Record<string, unknown>;
+    req: PayloadRequest;
+  }) => void | Promise<void>;
+  /** Preview links in the admin. Must match the middleware `previewParam`. */
+  preview?: false | { siteUrl?: string; param?: string };
   overrides?: (collection: CollectionConfig) => CollectionConfig;
+};
+export type AudienceCollectionContext = {
+  locale: "en" | "fr";
+  linksSlug: string;
 };
 
 const operatorLabels: Record<
@@ -229,23 +247,9 @@ function manifestEndpoint(
         select: { key: true, priority: true, match: true, conditions: true },
       });
       const manifest = parseAudienceManifest({
-        audiences: result.docs.map((doc) => {
-          const d = doc as Record<string, unknown>;
-          return {
-            id: d.id,
-            key: d.key,
-            priority: d.priority,
-            match: d.match,
-            conditions: Array.isArray(d.conditions)
-              ? d.conditions.map((c: Record<string, unknown>) => ({
-                  parameter:
-                    c.parameter === "custom" ? c.customParameter : c.parameter,
-                  operator: c.operator,
-                  value: c.value,
-                }))
-              : [],
-          };
-        }),
+        audiences: result.docs.map((doc) =>
+          audienceDocToRule(doc as Record<string, unknown>),
+        ),
       });
       return Response.json(manifest, {
         headers: {
@@ -261,7 +265,23 @@ function manifestEndpoint(
 export function audiencesCollection(
   slug: string,
   options: PersonalizationOptions,
+  context: AudienceCollectionContext = { locale: "en", linksSlug: "utm-links" },
 ): CollectionConfig {
+  const notify = async (
+    args: Parameters<
+      NonNullable<PersonalizationOptions["afterAudienceChange"]>
+    >[0],
+  ) => {
+    if (!options.afterAudienceChange) return;
+    try {
+      await options.afterAudienceChange(args);
+    } catch (error) {
+      args.req.payload.logger.error({
+        err: error,
+        msg: "utmPlugin: afterAudienceChange failed",
+      });
+    }
+  };
   const authenticated: NonNullable<CollectionConfig["access"]>["read"] = ({
     req,
   }) => Boolean(req.user);
@@ -441,12 +461,48 @@ export function audiencesCollection(
         ],
         admin: { position: "sidebar" },
       },
+      ...(options.preview === false
+        ? []
+        : [
+            {
+              name: "preview",
+              type: "ui",
+              label: { en: "Preview", fr: "Aperçu" },
+              admin: {
+                position: "sidebar",
+                components: {
+                  Field: {
+                    path: "payload-plugin-utm/client#AudiencePreview",
+                    clientProps: {
+                      locale: context.locale,
+                      siteUrl: options.preview?.siteUrl,
+                      param: options.preview?.param ?? "utm_preview",
+                      linksSlug: context.linksSlug,
+                    },
+                  },
+                },
+              },
+            } as Field,
+          ]),
       {
         name: "notes",
         type: "textarea",
         label: { en: "Internal notes", fr: "Notes internes" },
       },
     ],
+    hooks: {
+      afterChange: [
+        async ({ doc, previousDoc, operation, req }) => {
+          await notify({ operation, doc, previousDoc, req });
+          return doc;
+        },
+      ],
+      afterDelete: [
+        async ({ doc, req }) => {
+          await notify({ operation: "delete", doc, req });
+        },
+      ],
+    },
     endpoints: [manifestEndpoint(slug, options.manifest)],
   };
 }

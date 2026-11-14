@@ -14,7 +14,9 @@ import {
   createPersonalizationMiddleware,
 } from "../src/next.js";
 import {
+  audienceDocToRule,
   conditionMatches,
+  exampleCampaignQuery,
   filterPersonalizedBlocks,
   hasCampaignParameters,
   parseAudienceManifest,
@@ -473,4 +475,169 @@ test("manifest failures never break requests and stale rules are reused", async 
   })(request("/?utm_medium=qr"));
   assert.equal(empty.status, 200);
   assert.equal(forwarded(empty, "x-utm-audience"), null);
+});
+
+test("preview parameter forces an audience for one request without touching the cookie", async () => {
+  const run = middleware();
+  const forced = await run(
+    request("/menu?utm_preview=partners", "utm_audience=restaurants"),
+  );
+  assert.equal(forwarded(forced, "x-utm-audience"), "partners");
+  assert.equal(forced.cookies.get("utm_audience"), undefined);
+  const defaults = await run(
+    request("/?utm_preview=default&utm_medium=qr", "utm_audience=restaurants"),
+  );
+  assert.equal(forwarded(defaults, "x-utm-audience"), null);
+  assert.equal(defaults.cookies.get("utm_audience"), undefined);
+  const disabled = await middleware({ previewParam: false })(
+    request("/?utm_preview=partners"),
+  );
+  assert.equal(forwarded(disabled, "x-utm-audience"), null);
+  assert.throws(
+    () => createPersonalizationMiddleware({ previewParam: "bad param" }),
+    /previewParam/,
+  );
+});
+
+test("example campaign query and stored doc mapping", () => {
+  assert.equal(
+    exampleCampaignQuery([
+      { parameter: "utm_source", operator: "equals", value: " Restaurant-A " },
+      { parameter: "utm_medium", operator: "in", value: "qr, flyer" },
+      { parameter: "utm_term", operator: "notEquals", value: "x" },
+      { parameter: "ref", operator: "exists" },
+    ]),
+    "utm_source=Restaurant-A&utm_medium=qr&ref=1",
+  );
+  assert.equal(
+    exampleCampaignQuery(
+      [
+        { parameter: "utm_source", operator: "equals", value: "a" },
+        { parameter: "utm_source", operator: "equals", value: "b" },
+      ],
+      "any",
+    ),
+    "utm_source=a",
+  );
+  const parsed = parseAudienceManifest({
+    audiences: [
+      audienceDocToRule({
+        id: 4,
+        key: "vip",
+        conditions: [
+          {
+            parameter: "custom",
+            customParameter: "ref",
+            operator: "equals",
+            value: "vip",
+          },
+        ],
+      }),
+    ],
+  });
+  assert.equal(resolveAudience(q("ref=VIP"), parsed)?.id, 4);
+});
+
+test("UTM links get an audience relationship and match notice when personalization is on", async () => {
+  const result = await utmPlugin({
+    locale: "fr",
+    personalization: { audiencesSlug: "audiences" },
+  })({
+    collections: [],
+  } as unknown as Config);
+  const links = result.collections!.find((c) => c.slug === "utm-links")!;
+  const audience = links.fields.find(
+    (f) => "name" in f && f.name === "audience",
+  ) as {
+    relationTo: string;
+  };
+  assert.equal(audience.relationTo, "audiences");
+  const notice = links.fields.find(
+    (f) => "name" in f && f.name === "audienceCheck",
+  ) as {
+    admin: { components: { Field: { clientProps: Record<string, unknown> } } };
+  };
+  assert.equal(
+    notice.admin.components.Field.clientProps.audiencesSlug,
+    "audiences",
+  );
+  assert.equal(notice.admin.components.Field.clientProps.locale, "fr");
+  const base = await utmPlugin()({ collections: [] } as unknown as Config);
+  assert(
+    !base.collections![0]!.fields.some(
+      (f) => "name" in f && f.name === "audience",
+    ),
+  );
+});
+
+test("preview options are validated and can be disabled", async () => {
+  const run = (personalization: unknown) =>
+    utmPlugin({ personalization } as never)({
+      collections: [],
+    } as unknown as Config);
+  assert.throws(
+    () => run({ preview: { siteUrl: "https://site.test/path" } }),
+    /siteUrl/,
+  );
+  assert.throws(() => run({ preview: { param: "a b" } }), /param/);
+  assert.throws(
+    () => run({ afterAudienceChange: "nope" }),
+    /afterAudienceChange/,
+  );
+  const enabled = await run({
+    preview: { siteUrl: "https://site.test", param: "see" },
+  });
+  const audiences = enabled.collections!.find(
+    (c) => c.slug === "utm-audiences",
+  )!;
+  const preview = audiences.fields.find(
+    (f) => "name" in f && f.name === "preview",
+  ) as {
+    admin: { components: { Field: { clientProps: Record<string, unknown> } } };
+  };
+  assert.deepEqual(preview.admin.components.Field.clientProps, {
+    locale: "en",
+    siteUrl: "https://site.test",
+    param: "see",
+    linksSlug: "utm-links",
+  });
+  const disabled = await run({ preview: false });
+  assert(
+    !disabled
+      .collections!.find((c) => c.slug === "utm-audiences")!
+      .fields.some((f) => "name" in f && f.name === "preview"),
+  );
+});
+
+test("afterAudienceChange runs on change and delete, and its errors never fail the save", async () => {
+  const calls: string[] = [];
+  const logged: unknown[] = [];
+  const result = await utmPlugin({
+    personalization: {
+      afterAudienceChange: ({ operation, doc }) => {
+        calls.push(`${operation}:${doc.key}`);
+        if (operation === "delete")
+          throw new Error("revalidate outside request");
+      },
+    },
+  })({ collections: [] } as unknown as Config);
+  const audiences = result.collections!.find(
+    (c) => c.slug === "utm-audiences",
+  )!;
+  const req = {
+    payload: { logger: { error: (entry: unknown) => logged.push(entry) } },
+  };
+  const doc = { id: 1, key: "vip" };
+  assert.equal(
+    await audiences.hooks!.afterChange![0]!({
+      doc,
+      previousDoc: {},
+      operation: "update",
+      req,
+    } as never),
+    doc,
+  );
+  await audiences.hooks!.afterDelete![0]!({ doc, req } as never);
+  assert.deepEqual(calls, ["update:vip", "delete:vip"]);
+  assert.equal(logged.length, 1);
 });

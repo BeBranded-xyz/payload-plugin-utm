@@ -36,6 +36,11 @@ export type PersonalizationMiddlewareOptions = {
    * audience variant is a cacheable route. Visitors without an audience are not rewritten.
    */
   rewrite?: false | { prefix?: string };
+  /**
+   * Admin preview: `?utm_preview=<key>` (or `default`) forces an audience for
+   * that request only, without touching the cookie. `false` disables it.
+   */
+  previewParam?: string | false;
 };
 
 type CacheEntry = { manifest: AudienceManifest; expires: number };
@@ -88,6 +93,14 @@ async function getManifest(
 export function createPersonalizationMiddleware(
   options: PersonalizationMiddlewareOptions = {},
 ) {
+  const previewParam =
+    options.previewParam === false
+      ? null
+      : (options.previewParam ?? "utm_preview");
+  if (previewParam !== null && !/^[A-Za-z0-9_.-]{1,64}$/.test(previewParam))
+    throw new Error(
+      "createPersonalizationMiddleware: previewParam must be a URL parameter name.",
+    );
   const cookieName =
     (options.cookie !== false && options.cookie?.name) || AUDIENCE_COOKIE;
   const maxAge =
@@ -121,11 +134,15 @@ export function createPersonalizationMiddleware(
     }
 
     const manifest = await getManifest(request, options);
-    const fromUrl = hasCampaignParameters(url.searchParams, manifest);
+    const previewKey = previewParam ? url.searchParams.get(previewParam) : null;
+    const preview = previewKey !== null;
+    const fromUrl =
+      !preview && hasCampaignParameters(url.searchParams, manifest);
     const allowCookie =
       options.cookie !== false && (options.consent?.(request) ?? true);
     let audience: ActiveAudience | null = null;
-    if (fromUrl) audience = resolveAudience(url.searchParams, manifest);
+    if (preview) audience = findAudience(manifest, previewKey);
+    else if (fromUrl) audience = resolveAudience(url.searchParams, manifest);
     else if (allowCookie)
       audience = findAudience(manifest, request.cookies.get(cookieName)?.value);
 
@@ -162,6 +179,19 @@ export function createPersonalizationMiddleware(
     }
     return response;
   };
+}
+
+/**
+ * Static (rewrite) mode: invalidate every cached audience variant, e.g. from
+ * `personalization.afterAudienceChange` or your pages' `afterChange` hooks.
+ * Call it only inside a Next.js server context (hooks triggered by the admin or API).
+ */
+export async function revalidatePersonalizedRoutes(
+  options: { prefix?: string } = {},
+): Promise<void> {
+  const prefix = (options.prefix ?? "utm-audience").replace(/^\/+|\/+$/g, "");
+  const { revalidatePath } = await import("next/cache.js");
+  revalidatePath(`/${prefix}`, "layout");
 }
 
 /** Dynamic mode: read the audience forwarded by the middleware in a Server Component. */
