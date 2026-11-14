@@ -150,3 +150,22 @@ test("stats endpoint resolves `auto` from the source-memory cookie", async () =>
   assert.equal((await handler(req("auto"))).status, 204);
   assert.equal(created[1]!.audience, "default");
 });
+
+test("buildAudienceManifest reads the database directly with the plugin settings", async () => {
+  const { buildAudienceManifest } = await import("../src/index.js");
+  const config = utmPlugin({ personalization: { audiencesSlug: "audiences", manifest: { limit: 7 } } })({} as Config) as Config;
+  let seen: Record<string, unknown> = {};
+  const payload = {
+    config: { custom: config.custom },
+    logger: { error: () => {} },
+    find: async (args: Record<string, unknown>) => {
+      seen = args;
+      return { docs: [{ id: 1, key: "coudac", pages: ["/fr/"], conditions: [{ parameter: "referrer", operator: "equals", value: "coudac.*" }] }] };
+    },
+  };
+  const manifest = await buildAudienceManifest(payload as never);
+  assert.equal(seen.collection, "audiences");
+  assert.equal(seen.limit, 7);
+  assert.equal(seen.overrideAccess, true);
+  assert.deepEqual(manifest.audiences.map((a) => [a.key, a.paths]), [["coudac", ["/fr"]]]);
+});

@@ -5,6 +5,7 @@ import type {
   Config,
   Endpoint,
   Field,
+  Payload,
   PayloadRequest,
   Where,
 } from "payload";
@@ -19,6 +20,7 @@ import {
   normalizeHost,
   normalizePath,
   parseAudienceManifest,
+  type AudienceManifest,
 } from "./match.js";
 import {
   AUTO_AUDIENCE,
@@ -463,12 +465,12 @@ export function addPersonalizationToBlocks(
 }
 
 async function audiencePaths(
-  req: PayloadRequest,
+  payload: Payload,
   paths: NonNullable<PersonalizationOptions["paths"]>,
   tenantWhere: Where | undefined,
 ): Promise<Map<string, Set<string>> | null> {
   const byAudience = new Map<string, Set<string>>();
-  const localization = req.payload.config?.localization;
+  const localization = payload.config?.localization;
   const locales: (string | undefined)[] = localization
     ? localization.localeCodes
     : [undefined];
@@ -503,7 +505,7 @@ async function audiencePaths(
       for (const [collection, resolve] of Object.entries(
         paths.collections ?? {},
       )) {
-        const result = await req.payload.find({
+        const result = await payload.find({
           collection: collection as CollectionSlug,
           overrideAccess: true,
           depth: 0,
@@ -518,7 +520,7 @@ async function audiencePaths(
       }
       for (const [global, resolve] of Object.entries(paths.globals ?? {}))
         add(
-          (await req.payload.findGlobal({
+          (await payload.findGlobal({
             slug: global as never,
             overrideAccess: true,
             depth: 0,
@@ -530,13 +532,94 @@ async function audiencePaths(
     }
   } catch (error) {
     // Incomplete knowledge must not hide variants: fall back to rewriting every path.
-    req.payload.logger.error({
+    payload.logger.error({
       err: error,
       msg: "utmPlugin: audience paths unavailable",
     });
     return null;
   }
   return byAudience;
+}
+
+/** Settings the plugin stores on `config.custom` for `buildAudienceManifest`. */
+export const MANIFEST_SETTINGS_KEY = "utmPersonalizationManifest";
+export type ManifestSettings = {
+  audiencesSlug: string;
+  limit: number;
+  paths?: PersonalizationOptions["paths"];
+};
+
+/**
+ * The audience manifest, read from the database: what `GET /api/<audiences>/manifest`
+ * returns, without an HTTP round trip. Use it as the middleware `loadManifest`
+ * when the proxy runs in the same app as Payload (Node.js runtime):
+ *
+ * ```ts
+ * createPersonalizationResolver({
+ *   loadManifest: async () => buildAudienceManifest(await getPayload({ config })),
+ * })
+ * ```
+ */
+export async function buildAudienceManifest(
+  payload: Payload,
+  options: {
+    audiencesSlug?: string;
+    limit?: number;
+    paths?: PersonalizationOptions["paths"];
+    /** Extra filters (tenant…), combined with `state = active`. */
+    where?: Where[];
+    tenantWhere?: Where;
+  } = {},
+): Promise<AudienceManifest> {
+  const stored = (payload.config?.custom?.[MANIFEST_SETTINGS_KEY] ?? {}) as
+    Partial<ManifestSettings>;
+  const slug = options.audiencesSlug ?? stored.audiencesSlug ?? "utm-audiences";
+  const paths = options.paths ?? stored.paths;
+  const where: Where[] = options.where ?? [{ state: { equals: "active" } }];
+  // Public, fixed projection: arbitrary filters would expose private fields.
+  const result = await payload.find({
+    collection: slug as CollectionSlug,
+    overrideAccess: true,
+    depth: 0,
+    limit: options.limit ?? stored.limit ?? 500,
+    sort: "priority",
+    where: { and: where },
+    select: {
+      key: true,
+      priority: true,
+      match: true,
+      conditions: true,
+      startsAt: true,
+      endsAt: true,
+      pages: true,
+    } as never,
+  });
+  const pathMap = paths
+    ? await audiencePaths(payload, paths, options.tenantWhere)
+    : null;
+  return parseAudienceManifest({
+    audiences: result.docs.map((doc) => {
+      const rule = audienceDocToRule(
+        doc as Record<string, unknown>,
+      ) as Record<string, unknown>;
+      // Pages entered on the audience (code mode) plus pages found in personalized blocks.
+      const manual = (
+        Array.isArray((doc as { pages?: unknown }).pages)
+          ? ((doc as { pages: unknown[] }).pages as unknown[])
+          : []
+      )
+        .filter((path): path is string => typeof path === "string")
+        .map(normalizePath);
+      if (pathMap)
+        return {
+          ...rule,
+          paths: [
+            ...new Set([...(pathMap.get(String(rule.id)) ?? []), ...manual]),
+          ],
+        };
+      return manual.length ? { ...rule, paths: [...new Set(manual)] } : rule;
+    }),
+  });
 }
 
 function manifestEndpoint(
@@ -572,52 +655,12 @@ function manifestEndpoint(
         typeof tenant === "string" && options.tenantField
           ? { [options.tenantField]: { equals: tenant } }
           : undefined;
-      // Public, fixed projection: arbitrary filters would expose private fields.
-      const result = await req.payload.find({
-        collection: slug as CollectionSlug,
-        overrideAccess: true,
-        depth: 0,
+      const manifest = await buildAudienceManifest(req.payload, {
+        audiencesSlug: slug,
         limit,
-        sort: "priority",
-        where: { and: where },
-        select: {
-          key: true,
-          priority: true,
-          match: true,
-          conditions: true,
-          startsAt: true,
-          endsAt: true,
-          pages: true,
-        } as never,
-      });
-      const pathMap = paths
-        ? await audiencePaths(req, paths, tenantWhere)
-        : null;
-      const manifest = parseAudienceManifest({
-        audiences: result.docs.map((doc) => {
-          const rule = audienceDocToRule(
-            doc as Record<string, unknown>,
-          ) as Record<string, unknown>;
-          // Pages entered on the audience (code mode) plus pages found in personalized blocks.
-          const manual = (
-            Array.isArray((doc as { pages?: unknown }).pages)
-              ? ((doc as { pages: unknown[] }).pages as unknown[])
-              : []
-          )
-            .filter((path): path is string => typeof path === "string")
-            .map(normalizePath);
-          if (pathMap)
-            return {
-              ...rule,
-              paths: [
-                ...new Set([
-                  ...(pathMap.get(String(rule.id)) ?? []),
-                  ...manual,
-                ]),
-              ],
-            };
-          return manual.length ? { ...rule, paths: [...new Set(manual)] } : rule;
-        }),
+        paths,
+        where,
+        tenantWhere,
       });
       return Response.json(manifest, {
         headers: {

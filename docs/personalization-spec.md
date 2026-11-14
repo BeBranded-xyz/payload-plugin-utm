@@ -106,6 +106,10 @@ Found on the BeBranded site: pages are hand-written React components (no Payload
 - Stats: `audience: "auto"` resolved server-side with `updateSourceMemory` over the active rules (cached 60 s) and the `utm_memory` cookie; never counted as personalized. `auto` joins `default` as a reserved key.
 - Tracker: optional `audience` (`auto` when omitted), `onView(detail)`.
 
+## 0.2.0-beta.3
+
+- `buildAudienceManifest(payload, options?)`: the endpoint's logic as a function (fixed projection, manual pages, block paths); settings (`audiencesSlug`, `limit`, `paths`) stored on `config.custom.utmPersonalizationManifest`. Measured on the BeBranded site (`next start`): first request after start 0.57 s including render, then ~10 ms; the build bundles Payload into the Node.js proxy.
+
 ## Out of scope (next)
 
 Geo / language conditions; Edge Config adapter; percentage A/B within an audience.

@@ -165,6 +165,20 @@ It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 
 
 Rules are re-evaluated on every request, so audiences created or edited later still apply. **A remembered audience stays until another audience replaces it, or until it expires**: a visitor referred by a partner who comes back through Google or by typing your URL still gets the partner version; arriving through another campaign that has its own audience switches to it. Internal navigation is never an arrival and never sets a cookie, so cached pages stay cacheable. UTM parameters are never propagated in internal links (that would split GA4 sessions). Read the memory in a Server Component with `getSourceMemory()`, e.g. to attach the original campaign to a lead form.
 
+**Same app as Payload? Read the manifest from the database.** By default the middleware fetches the manifest over HTTP from your own site, which can be slow when an instance starts. When the proxy runs in the same Next.js app as Payload (Node.js runtime, the default for `proxy.ts`), load it directly:
+
+```ts
+import config from '@payload-config'
+import { getPayload } from 'payload'
+import { buildAudienceManifest } from 'payload-plugin-utm'
+
+createPersonalizationMiddleware({
+  loadManifest: async () => buildAudienceManifest(await getPayload({ config })),
+})
+```
+
+It returns exactly what the endpoint serves (same projection, pages and block paths), with the plugin's own settings. It is cached and refreshed in the background like the HTTP manifest.
+
 Options: `manifestUrl` (absolute, for a separate CMS), `loadManifest` (Edge Config, KV, static JSON…), `secret` (paired with `personalization.manifest.secret`), `cacheTtlSeconds`, `cookie: false | { name, maxAgeSeconds }`, `consent: (request) => boolean`, `rewrite`, `previewParam` (default `utm_preview`, `false` to disable).
 
 **Already have a proxy?** Sites that rewrite or redirect in `proxy.ts` (locale segment, several hosts, Markdown versions…) keep it and ask the plugin for a decision only. `createPersonalizationResolver()` takes the same options and returns the audience, the request headers to forward, the source-memory cookie and the static variant segment; your code builds the response:

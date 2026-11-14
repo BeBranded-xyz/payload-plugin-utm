@@ -13,6 +13,7 @@ import { csvEndpoint } from "./csv-endpoint.js";
 import {
   addPersonalizationToBlocks,
   audiencesCollection,
+  MANIFEST_SETTINGS_KEY,
   statsSettings,
   viewsCollection,
 } from "./personalization/collection.js";
@@ -39,6 +40,7 @@ export {
 } from "./personalization/collection.js";
 export * from "./personalization/match.js";
 export { getAudienceContent } from "./personalization/server.js";
+export { buildAudienceManifest } from "./personalization/collection.js";
 export * from "./personalization/stats.js";
 export type { PathResolver } from "./personalization/collection.js";
 export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
@@ -507,6 +509,15 @@ function withPersonalization(
   };
   const withCollection: Config = {
     ...config,
+    // Read by buildAudienceManifest(payload) so a proxy can load the manifest without HTTP.
+    custom: {
+      ...config.custom,
+      [MANIFEST_SETTINGS_KEY]: {
+        audiencesSlug: slug,
+        limit: manifest.limit ?? 500,
+        paths: options.paths,
+      },
+    },
     collections: [
       ...(config.collections ?? []),
       audiences,

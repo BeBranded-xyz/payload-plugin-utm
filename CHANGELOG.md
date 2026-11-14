@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 — unreleased (0.2.0-beta.2 on npm under the `beta` tag)
+## 0.2.0 — unreleased (0.2.0-beta.3 on npm under the `beta` tag)
+
+0.2.0-beta.3: `buildAudienceManifest(payload)` reads the manifest from the database (same output as the endpoint, plugin settings stored on `config.custom`), for proxies running in the same app as Payload: no HTTP round trip, no slow first request when an instance starts.
 
 0.2.0-beta.2, security: request paths are normalized with a linear scan (the previous regexes could be slowed down by URLs with thousands of slashes, on every request through the middleware); audience token fallbacks are bounded; slug normalization and admin preview links hardened. No API change; upgrade from beta.1 recommended.
 
