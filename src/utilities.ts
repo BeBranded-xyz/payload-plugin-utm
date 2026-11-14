@@ -28,7 +28,8 @@ export function normalizeUtmValue(
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
+      .replace(/^-/, "")
+      .replace(/-$/, "");
   return trimmed;
 }
 export function validateDestination(

@@ -292,8 +292,16 @@ export function audienceDocToRule(doc: Record<string, unknown>): unknown {
 
 /** `/menu/` → `/menu`; query and hash removed; root stays `/`. */
 export function normalizePath(path: string): string {
-  const clean = path.split(/[?#]/)[0]!.replace(/\/{2,}/g, "/");
-  return clean.length > 1 ? clean.replace(/\/+$/, "") || "/" : "/";
+  // Linear scan (runs on every request URL): collapse repeated slashes, drop one trailing slash.
+  const raw = path.split(/[?#]/)[0]!;
+  let clean = "";
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (char === "/" && clean.endsWith("/")) continue;
+    clean += char;
+  }
+  if (clean.length > 1 && clean.endsWith("/")) clean = clean.slice(0, -1);
+  return clean.length > 1 ? clean : "/";
 }
 
 const validDate = (value: unknown): value is string =>
@@ -888,7 +896,9 @@ export function updateSourceMemory(input: {
 /* Audience content tokens: {{audience.name|our clients}}              */
 /* ------------------------------------------------------------------ */
 
-const TOKEN = /\{\{\s*audience\.([A-Za-z0-9_]{1,64})\s*(?:\|([^}]*))?\}\}/g;
+// Fallbacks cannot contain braces: bounded, no backtracking across tokens.
+const TOKEN =
+  /\{\{\s{0,3}audience\.([A-Za-z0-9_]{1,64})\s{0,3}(?:\|([^{}]{0,500}))?\}\}/g;
 
 /**
  * Replace `{{audience.<field>}}` / `{{audience.<field>|fallback}}` in every

@@ -773,17 +773,29 @@ function useEditorBlocks(fieldName: string): EditorBlock[] {
   return useMemo(() => JSON.parse(serialized) as EditorBlock[], [serialized]);
 }
 
+/** Preview URL on the site's own origin only (http/https); undefined otherwise. */
 function previewHref(
   origin: string,
   path: string,
   param: string,
   key: string,
   draftRoute?: string,
-): string {
-  const clean = "/" + path.trim().replace(/^\/+/, "");
-  if (draftRoute)
-    return `${origin}${draftRoute}?path=${encodeURIComponent(clean)}&${encodeURIComponent(param)}=${encodeURIComponent(key)}`;
-  return `${origin}${clean}${clean.includes("?") ? "&" : "?"}${encodeURIComponent(param)}=${encodeURIComponent(key)}`;
+): string | undefined {
+  try {
+    const base = new URL(origin);
+    const clean = "/" + path.trim().replace(/^\/+/, "");
+    const target = new URL(draftRoute ?? clean, base);
+    if (
+      target.origin !== base.origin ||
+      (target.protocol !== "https:" && target.protocol !== "http:")
+    )
+      return undefined;
+    if (draftRoute) target.searchParams.set("path", clean);
+    target.searchParams.set(param, key);
+    return target.href;
+  } catch {
+    return undefined;
+  }
 }
 
 function useOrigin(siteUrl?: string) {
@@ -1194,13 +1206,14 @@ export function PersonalizationSimulator({
       const origin = /^https?:\/\//i.test(url.trim())
         ? parsed.origin
         : fallbackOrigin;
-      previewUrl = previewHref(
-        origin,
-        parsed.pathname,
-        previewParam,
-        result.audience?.key ?? "default",
-        draftRoute,
-      );
+      previewUrl =
+        previewHref(
+          origin,
+          parsed.pathname,
+          previewParam,
+          result.audience?.key ?? "default",
+          draftRoute,
+        ) ?? null;
     } catch {
       previewUrl = null;
     }
