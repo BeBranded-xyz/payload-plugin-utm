@@ -166,6 +166,26 @@ Rules are re-evaluated on every request, so audiences created or edited later st
 
 Options: `manifestUrl` (absolute, for a separate CMS), `loadManifest` (Edge Config, KV, static JSON…), `secret` (paired with `personalization.manifest.secret`), `cacheTtlSeconds`, `cookie: false | { name, maxAgeSeconds }`, `consent: (request) => boolean`, `rewrite`, `previewParam` (default `utm_preview`, `false` to disable).
 
+**Already have a proxy?** Sites that rewrite or redirect in `proxy.ts` (locale segment, several hosts, Markdown versions…) keep it and ask the plugin for a decision only. `createPersonalizationResolver()` takes the same options and returns the audience, the request headers to forward, the source-memory cookie and the static variant segment; your code builds the response:
+
+```ts
+// proxy.ts
+import { NextResponse, type NextRequest } from 'next/server'
+import { createPersonalizationResolver } from 'payload-plugin-utm/next'
+
+const personalize = createPersonalizationResolver({ rewrite: { prefix: 'utm-audience' } })
+
+export async function proxy(request: NextRequest) {
+  const decision = await personalize(request)
+  if (decision.redirect) return NextResponse.redirect(decision.redirect, 308)
+  const url = request.nextUrl.clone()
+  url.pathname = decision.variantPath(`/en${url.pathname}`) // your own rewrite, then the audience segment
+  return decision.apply(NextResponse.rewrite(url, { request: { headers: decision.requestHeaders } }))
+}
+```
+
+`variantPath()` prefixes the path only when this public page has content for the audience (`decision.variant`); place the segment wherever your route tree expects it. `apply()` sets the cookie on the response you return; forward `requestHeaders` on every branch (`NextResponse.next({ request: { headers } })` included) or Server Components will not see the audience.
+
 ### 3. Render
 
 **Dynamic pages** (simplest; the page is rendered per request):
@@ -178,6 +198,23 @@ const blocks = filterPersonalizedBlocks(page.layout, audience)
 ```
 
 **Static pages**: `createPersonalizationMiddleware({ rewrite: { prefix: 'utm-audience' } })` rewrites `/menu?utm_source=…` to `/utm-audience/<key>/menu`, so each audience variant is cached like any static page. Add a route such as `app/(site)/utm-audience/[audience]/[[...slug]]/page.tsx` that renders the same page with `filterPersonalizedBlocks(page.layout, audienceFromParam(params.audience))`, and emit the public URL as canonical. Visitors without an audience keep the normal route; direct visits to the prefix are redirected (308). In this mode, query with `depth ≥ 1` so audiences are populated with their `key`.
+
+**Pages written in code** (no Payload blocks): keep audiences and their content in Payload and mark what changes with `<Personalized>`, a Server Component from `payload-plugin-utm/react`:
+
+```tsx
+import { Personalized } from 'payload-plugin-utm/react'
+import { getAudienceContent } from 'payload-plugin-utm'
+import { getActiveAudience } from 'payload-plugin-utm/next'
+
+<Personalized only="coudac" fallback={<DefaultBadge />}>
+  <ReferralBadge />
+</Personalized>
+
+// Text and image from the audience's Content tab, edited in the admin:
+const content = await getAudienceContent(payload, await getActiveAudience())
+```
+
+`only` and `except` take one key or a list. Without an `audience` prop it reads the middleware headers (dynamic rendering); in static mode pass `audience={audienceFromParam(params.audience)}` (or `null` on the default route) so the page stays static. New partners then need an audience in the admin, not a deployment, as long as the component targets them (`only={['coudac', 'lafabriquedunet']}`, or render `content.displayName` for any audience).
 
 **Only vary the pages that change.** Tell the plugin your public paths and the manifest lists, per audience, the pages with content for it; the middleware then rewrites only those, and every other page stays one shared cached version:
 

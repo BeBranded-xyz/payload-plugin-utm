@@ -61,6 +61,11 @@
       "types": "./dist/rsc.d.ts",
       "import": "./dist/rsc.js",
       "default": "./dist/rsc.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
     }
   },
   "files": [

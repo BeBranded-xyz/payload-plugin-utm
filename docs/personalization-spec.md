@@ -82,6 +82,13 @@ Origin of the need: on the BeBranded site, the first referring site (coudac.com,
 - **Targeted rewrite**: with `personalization.paths`, the manifest scans configured collections/globals, collects personalized blocks (`mode` ≠ all) and lists public paths per audience. The middleware rewrites only listed paths. Any scan failure or overflow omits `paths` → rewrite everything (never lose a variant). Startup error when a personalized collection has no resolver.
 - **From a UTM link**: "Personalize the site for this link" creates an audience (`utm_source` + `utm_campaign` [+ `utm_content`] equals) with a slug key (suffixed on conflict) and attaches it.
 
+## Composition and code mode (added before release)
+
+Found on the BeBranded site: pages are hand-written React components (no Payload blocks yet) and `proxy.ts` already rewrites every request (internal `/en` locale segment, hosts, Markdown). A middleware that returns its own response cannot be nested there.
+
+- **`createPersonalizationResolver(options)`** (same options as the middleware) returns a decision, not a response: `audience`, `requestHeaders` (spoofed copies stripped), `redirect` (direct prefix hit), `variant` / `variantPath(path)` (static segment, only for targeted public paths), `cookie` and `apply(response)`. `createPersonalizationMiddleware` is built on it, so both behave identically.
+- **`<Personalized only|except audience? fallback?>`** (`payload-plugin-utm/react`): async Server Component; reads the middleware headers when `audience` is omitted, or takes the static route param. The pure rule is `matchesAudienceKeys`. Content still comes from the audience (`getAudienceContent`), never from the URL.
+
 ## Out of scope (next)
 
 Geo / language conditions; Edge Config adapter; percentage A/B within an audience.

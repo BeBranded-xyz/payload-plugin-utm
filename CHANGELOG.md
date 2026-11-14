@@ -6,6 +6,8 @@ Opt-in content personalization by campaign audience: `utm-audiences` collection 
 
 Provenance: referring-site conditions (domains, subdomains included), a `utm_memory` source-memory cookie (first, latest and audience-selecting arrival, 90 days, re-evaluated on every request, sticky until another audience replaces it; written only on arrivals), `getSourceMemory()`, audience content fields with `{{audience.field|fallback}}` tokens (`fillAudienceTokens`, `getAudienceContent`), per-audience page paths in the manifest so static mode only rewrites pages that change (`personalization.paths`), "Personalize the site for this link" from a UTM link, and a referrer input in the URL simulator.
 
+Composition: `createPersonalizationResolver()` returns the decision (audience, headers, cookie, variant path) for sites that already have a proxy with their own rewrites; `createPersonalizationMiddleware()` is now a thin layer over it. Code mode: `<Personalized only/except>` Server Component (`payload-plugin-utm/react`) for pages written in React rather than Payload blocks.
+
 ## 0.1.0 — 2026-11-02
 
 Initial community release: Payload collection plugin, live generation/copy, EN/FR controls, optional presets and related content, searchable inventory and archiving, URL policy options, permission-aware bounded CSV export, and dependency-free helpers for campaign variants.

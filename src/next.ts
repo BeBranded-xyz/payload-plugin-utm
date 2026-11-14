@@ -99,7 +99,57 @@ async function getManifest(
   }
 }
 
-export function createPersonalizationMiddleware(
+/** Cookie the caller must set on its response (see `PersonalizationDecision.apply`). */
+export type PersonalizationCookie = {
+  name: string;
+  value: string;
+  options: {
+    maxAge: number;
+    path: string;
+    httpOnly: boolean;
+    sameSite: "lax";
+    secure: boolean;
+  };
+};
+
+/** What the personalization layer decided for one request. Builds no response. */
+export type PersonalizationDecision = {
+  /** Resolved audience (preview included), null for default content. */
+  audience: ActiveAudience | null;
+  /** Copy of the request headers with the audience and source memory set (spoofed copies removed). Forward them. */
+  requestHeaders: Headers;
+  /** Set when the request hits the internal variant prefix directly: answer with a 308 to this URL. */
+  redirect: URL | null;
+  /**
+   * Static mode: the variant segment to insert when this public path has
+   * content for the audience, else null (serve the normal route).
+   */
+  variant: { prefix: string; key: string } | null;
+  /** `variantPath("/en/about")` → `/utm-audience/coudac/en/about` when `variant` is set, else the path unchanged. */
+  variantPath: (pathname: string) => string;
+  /** Source memory cookie to write (arrivals only), or null. */
+  cookie: PersonalizationCookie | null;
+  /** Sets `cookie` on the response you built (rewrite, next, redirect…) and returns it. */
+  apply: <R extends NextResponse>(response: R) => R;
+};
+
+/**
+ * Decision only, for sites that already have a middleware / proxy (locale or
+ * host rewrites, redirects…): resolves the audience, the forwarded headers,
+ * the cookie and the variant path, and lets your code build the response.
+ *
+ * ```ts
+ * const personalize = createPersonalizationResolver({ rewrite: { prefix: "utm-audience" } });
+ * export async function proxy(request: NextRequest) {
+ *   const decision = await personalize(request);
+ *   if (decision.redirect) return NextResponse.redirect(decision.redirect, 308);
+ *   const url = request.nextUrl.clone();
+ *   url.pathname = decision.variantPath(`/en${url.pathname}`); // your own rewrite
+ *   return decision.apply(NextResponse.rewrite(url, { request: { headers: decision.requestHeaders } }));
+ * }
+ * ```
+ */
+export function createPersonalizationResolver(
   options: PersonalizationMiddlewareOptions = {},
 ) {
   const previewParam =
@@ -123,10 +173,39 @@ export function createPersonalizationMiddleware(
       "createPersonalizationMiddleware: rewrite.prefix must be one path segment without a leading underscore.",
     );
 
-  return async function personalize(
+  return async function resolvePersonalization(
     request: NextRequest,
-  ): Promise<NextResponse> {
+  ): Promise<PersonalizationDecision> {
     const url = request.nextUrl;
+    const headers = new Headers(request.headers);
+    headers.delete(AUDIENCE_HEADER);
+    headers.delete(AUDIENCE_ID_HEADER);
+    headers.delete(SOURCE_MEMORY_HEADER);
+    const decision = (
+      audience: ActiveAudience | null,
+      extra: Partial<PersonalizationDecision> = {},
+    ): PersonalizationDecision => {
+      const variant = extra.variant ?? null;
+      const cookie = extra.cookie ?? null;
+      return {
+        audience,
+        requestHeaders: headers,
+        redirect: null,
+        variant,
+        cookie,
+        variantPath: (pathname) =>
+          variant
+            ? `${variant.prefix}/${variant.key}${pathname === "/" ? "" : pathname}`
+            : pathname,
+        apply: (response) => {
+          if (cookie)
+            response.cookies.set(cookie.name, cookie.value, cookie.options);
+          return response;
+        },
+        ...extra,
+      };
+    };
+
     // Variant routes are internal; never serve them under their own URL.
     if (
       prefix &&
@@ -139,7 +218,7 @@ export function createPersonalizationMiddleware(
         .slice(2)
         .join("/");
       target.pathname = "/" + rest;
-      return NextResponse.redirect(target, 308);
+      return decision(null, { redirect: target });
     }
 
     const manifest = await getManifest(request, options);
@@ -170,10 +249,6 @@ export function createPersonalizationMiddleware(
       changed = allowCookie && result.changed;
     }
 
-    const headers = new Headers(request.headers);
-    headers.delete(AUDIENCE_HEADER);
-    headers.delete(AUDIENCE_ID_HEADER);
-    headers.delete(SOURCE_MEMORY_HEADER);
     if (audience) {
       headers.set(AUDIENCE_HEADER, audience.key);
       if (audience.id !== undefined)
@@ -186,29 +261,53 @@ export function createPersonalizationMiddleware(
     const paths = audience
       ? manifest.audiences.find((item) => item.key === audience!.key)?.paths
       : undefined;
-    const rewrite =
-      prefix &&
-      audience &&
-      (!paths || paths.includes(normalizePath(url.pathname)));
-    let response: NextResponse;
-    if (rewrite) {
-      const target = url.clone();
-      target.pathname = `${prefix}/${audience!.key}${url.pathname === "/" ? "" : url.pathname}`;
-      response = NextResponse.rewrite(target, { request: { headers } });
-    } else response = NextResponse.next({ request: { headers } });
+    const variant =
+      prefix && audience && (!paths || paths.includes(normalizePath(url.pathname)))
+        ? { prefix, key: audience.key }
+        : null;
 
     // Written only on arrivals, so cached internal navigation carries no Set-Cookie.
-    if (changed && memory)
-      response.cookies.set(cookieName, serializeSourceMemory(memory), {
-        maxAge,
-        path: "/",
-        httpOnly: true,
-        sameSite: "lax",
-        secure:
-          (options.cookie !== false && options.cookie?.secure) ??
-          url.protocol === "https:",
-      });
-    return response;
+    const cookie: PersonalizationCookie | null =
+      changed && memory
+        ? {
+            name: cookieName,
+            value: serializeSourceMemory(memory),
+            options: {
+              maxAge,
+              path: "/",
+              httpOnly: true,
+              sameSite: "lax",
+              secure:
+                (options.cookie !== false && options.cookie?.secure) ??
+                url.protocol === "https:",
+            },
+          }
+        : null;
+    return decision(audience, { variant, cookie });
+  };
+}
+
+/**
+ * Complete middleware / proxy for sites without one. If you already have a
+ * proxy (locale, hosts…), use `createPersonalizationResolver()` inside it.
+ */
+export function createPersonalizationMiddleware(
+  options: PersonalizationMiddlewareOptions = {},
+) {
+  const resolve = createPersonalizationResolver(options);
+  return async function personalize(
+    request: NextRequest,
+  ): Promise<NextResponse> {
+    const decision = await resolve(request);
+    if (decision.redirect)
+      return NextResponse.redirect(decision.redirect, 308);
+    const init = { request: { headers: decision.requestHeaders } };
+    if (decision.variant) {
+      const target = request.nextUrl.clone();
+      target.pathname = decision.variantPath(target.pathname);
+      return decision.apply(NextResponse.rewrite(target, init));
+    }
+    return decision.apply(NextResponse.next(init));
   };
 }
 
