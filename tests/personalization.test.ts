@@ -1000,7 +1000,7 @@ test("referrer condition values must be domains; content fields are added", asyn
   ) as { fields: { name: string }[] };
   assert.deepEqual(
     content.fields.map((f) => f.name),
-    ["displayName", "tagline", "image", "sector"],
+    ["displayName", "tagline", "linkLabel", "linkUrl", "image", "sector"],
   );
   const conditions = audiences.fields.find(
     (f) => "name" in f && f.name === "conditions",

@@ -44,7 +44,16 @@ export type PersonalizationMiddlewareOptions = {
    * Static mode: rewrite `/path` to `<prefix>/<audience>/path` so every
    * audience variant is a cacheable route. Visitors without an audience are not rewritten.
    */
-  rewrite?: false | { prefix?: string };
+  rewrite?:
+    | false
+    | {
+        prefix?: string;
+        /**
+         * Locale segments your site places before the variant segment
+         * (`/fr/utm-audience/<key>`): direct hits on them are redirected too.
+         */
+        localePrefixes?: string[];
+      };
   /**
    * Admin preview: `?utm_preview=<key>` (or `default`) forces an audience for
    * that request only, without touching the cookie. `false` disables it.
@@ -54,50 +63,8 @@ export type PersonalizationMiddlewareOptions = {
 
 type CacheEntry = { manifest: AudienceManifest; expires: number };
 const cache = new Map<string, CacheEntry>();
+const inflight = new Map<string, Promise<AudienceManifest>>();
 const EMPTY: AudienceManifest = { version: 1, audiences: [] };
-
-/** For tests. */
-export function clearManifestCache() {
-  cache.clear();
-}
-
-async function getManifest(
-  request: NextRequest,
-  options: PersonalizationMiddlewareOptions,
-): Promise<AudienceManifest> {
-  const ttl = (options.cacheTtlSeconds ?? 60) * 1000;
-  const url = options.loadManifest
-    ? "custom"
-    : typeof options.manifestUrl === "function"
-      ? String(options.manifestUrl(request))
-      : options.manifestUrl
-        ? String(options.manifestUrl)
-        : new URL("/api/utm-audiences/manifest", request.url).toString();
-  const cached = cache.get(url);
-  if (cached && cached.expires > Date.now()) return cached.manifest;
-  try {
-    let raw: unknown;
-    if (options.loadManifest) raw = await options.loadManifest(request);
-    else {
-      const response = await fetch(url, {
-        headers: options.secret
-          ? { authorization: `Bearer ${options.secret}` }
-          : {},
-        signal: AbortSignal.timeout(options.timeoutMs ?? 1500),
-      });
-      if (!response.ok) throw new Error(`Manifest HTTP ${response.status}`);
-      raw = await response.json();
-    }
-    const manifest = parseAudienceManifest(raw);
-    cache.set(url, { manifest, expires: Date.now() + ttl });
-    return manifest;
-  } catch {
-    // Never break the site: serve stale rules, else no personalization, and retry soon.
-    const manifest = cached?.manifest ?? EMPTY;
-    cache.set(url, { manifest, expires: Date.now() + Math.min(ttl, 10_000) });
-    return manifest;
-  }
-}
 
 /** Cookie the caller must set on its response (see `PersonalizationDecision.apply`). */
 export type PersonalizationCookie = {
@@ -132,6 +99,63 @@ export type PersonalizationDecision = {
   /** Sets `cookie` on the response you built (rewrite, next, redirect…) and returns it. */
   apply: <R extends NextResponse>(response: R) => R;
 };
+
+/** For tests. */
+export function clearManifestCache() {
+  cache.clear();
+  inflight.clear();
+}
+
+async function getManifest(
+  request: NextRequest,
+  options: PersonalizationMiddlewareOptions,
+): Promise<AudienceManifest> {
+  const ttl = (options.cacheTtlSeconds ?? 60) * 1000;
+  const url = options.loadManifest
+    ? "custom"
+    : typeof options.manifestUrl === "function"
+      ? String(options.manifestUrl(request))
+      : options.manifestUrl
+        ? String(options.manifestUrl)
+        : new URL("/api/utm-audiences/manifest", request.url).toString();
+  const cached = cache.get(url);
+  if (cached && cached.expires > Date.now()) return cached.manifest;
+  // Stale-while-revalidate: once loaded, requests never wait for a refresh.
+  let refresh = inflight.get(url);
+  if (!refresh) {
+    refresh = (async () => {
+      try {
+        let raw: unknown;
+        if (options.loadManifest) raw = await options.loadManifest(request);
+        else {
+          const response = await fetch(url, {
+            headers: options.secret
+              ? { authorization: `Bearer ${options.secret}` }
+              : {},
+            signal: AbortSignal.timeout(options.timeoutMs ?? 1500),
+          });
+          if (!response.ok) throw new Error(`Manifest HTTP ${response.status}`);
+          raw = await response.json();
+        }
+        const manifest = parseAudienceManifest(raw);
+        cache.set(url, { manifest, expires: Date.now() + ttl });
+        return manifest;
+      } catch {
+        // Never break the site: keep stale rules, else no personalization, and retry soon.
+        const previous = cache.get(url)?.manifest ?? EMPTY;
+        cache.set(url, {
+          manifest: previous,
+          expires: Date.now() + Math.min(ttl, 10_000),
+        });
+        return previous;
+      } finally {
+        inflight.delete(url);
+      }
+    })();
+    inflight.set(url, refresh);
+  }
+  return cached ? cached.manifest : refresh;
+}
 
 /**
  * Decision only, for sites that already have a middleware / proxy (locale or
@@ -172,6 +196,24 @@ export function createPersonalizationResolver(
     throw new Error(
       "createPersonalizationMiddleware: rewrite.prefix must be one path segment without a leading underscore.",
     );
+  const localePrefixes =
+    (options.rewrite && options.rewrite.localePrefixes) || [];
+  if (localePrefixes.some((l) => !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(l)))
+    throw new Error(
+      "createPersonalizationMiddleware: rewrite.localePrefixes must be path segments such as fr or en-us.",
+    );
+  /** `/<locale>?/<prefix>/<key>/rest` → `/<locale>?/rest`, or null when not a variant path. */
+  const publicPathOf = (pathname: string): string | null => {
+    if (!prefix) return null;
+    for (const locale of ["", ...localePrefixes]) {
+      const head = locale ? `/${locale}${prefix}` : prefix;
+      if (pathname === head || pathname.startsWith(head + "/")) {
+        const rest = pathname.slice(head.length).split("/").slice(2).join("/");
+        return locale ? `/${locale}${rest ? "/" + rest : ""}` : "/" + rest;
+      }
+    }
+    return null;
+  };
 
   return async function resolvePersonalization(
     request: NextRequest,
@@ -207,17 +249,10 @@ export function createPersonalizationResolver(
     };
 
     // Variant routes are internal; never serve them under their own URL.
-    if (
-      prefix &&
-      (url.pathname === prefix || url.pathname.startsWith(prefix + "/"))
-    ) {
+    const publicPath = publicPathOf(url.pathname);
+    if (publicPath !== null) {
       const target = url.clone();
-      const rest = url.pathname
-        .slice(prefix.length)
-        .split("/")
-        .slice(2)
-        .join("/");
-      target.pathname = "/" + rest;
+      target.pathname = publicPath;
       return decision(null, { redirect: target });
     }
 

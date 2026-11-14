@@ -7,6 +7,8 @@
 import { isValidAudienceKey, normalizeHost, normalizePath } from "./match.js";
 
 export const DEFAULT_AUDIENCE = "default";
+/** Sent by pages that do not know the audience; the server resolves it from the source-memory cookie. */
+export const AUTO_AUDIENCE = "auto";
 
 /** What the tracker sends. */
 export type ViewEvent = {
@@ -51,9 +53,11 @@ export function parseViewEvent(
   const audience =
     raw.audience === DEFAULT_AUDIENCE || raw.audience == null
       ? DEFAULT_AUDIENCE
-      : isValidAudienceKey(raw.audience) && knownKeys.has(raw.audience)
-        ? raw.audience
-        : null;
+      : raw.audience === AUTO_AUDIENCE
+        ? AUTO_AUDIENCE
+        : isValidAudienceKey(raw.audience) && knownKeys.has(raw.audience)
+          ? raw.audience
+          : null;
   if (!audience) return null;
   if (typeof raw.path !== "string" || !raw.path.startsWith("/")) return null;
   const path = normalizePath(raw.path.split(/[?#]/)[0]!);
@@ -63,7 +67,10 @@ export function parseViewEvent(
   const event: ViewEvent = {
     audience,
     path,
-    variant: audience !== DEFAULT_AUDIENCE && raw.variant === true,
+    variant:
+      audience !== DEFAULT_AUDIENCE &&
+      audience !== AUTO_AUDIENCE &&
+      raw.variant === true,
     entry,
   };
   if (entry) {

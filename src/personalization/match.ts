@@ -50,7 +50,7 @@ export type PersonalizationValue = {
 } | null;
 
 export const AUDIENCE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const RESERVED_AUDIENCE_KEYS = ["default"] as const;
+export const RESERVED_AUDIENCE_KEYS = ["default", "auto"] as const;
 export const AUDIENCE_HEADER = "x-utm-audience";
 export const AUDIENCE_ID_HEADER = "x-utm-audience-id";
 /** Cookie holding the visitor's source memory (see `SourceMemory`). */
@@ -91,8 +91,26 @@ export function normalizeHost(value: unknown): string {
   host = host.split(/[/?#]/)[0]!.replace(/:\d+$/, "").replace(/\.$/, "");
   return host.replace(/^www\./, "");
 }
-const sameOrSubdomain = (actual: string, expected: string) =>
-  expected !== "" && (actual === expected || actual.endsWith("." + expected));
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Same domain or a subdomain of it. `name.*` matches the name on any extension
+ * (`coudac.*`: coudac.com, coudac.fr, shop.coudac.co.uk).
+ */
+export function domainMatches(actual: string, expected: string): boolean {
+  if (!actual || !expected) return false;
+  if (expected.endsWith(".*")) {
+    const base = expected.slice(0, -2);
+    return (
+      base !== "" &&
+      new RegExp(
+        `(^|\\.)${escapeRegExp(base)}(\\.(co|com|org|net|ac|gov|edu))?\\.[a-z]{2,}$`,
+      ).test(actual)
+    );
+  }
+  return actual === expected || actual.endsWith("." + expected);
+}
+const sameOrSubdomain = domainMatches;
 
 /** Case-insensitive parameter lookup; the first non-empty value wins. */
 function readParameter(params: URLSearchParams, name: string): string {

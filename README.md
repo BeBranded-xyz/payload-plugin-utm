@@ -135,8 +135,8 @@ utmPlugin({
 This adds **Marketing → Campaign audiences** and a **Personalization** group to the listed blocks, wherever they are used (collections, globals, nested blocks, `config.blocks`).
 
 - An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term`, any other URL parameter or the **referring site** (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch, a priority (lower wins) and optional **campaign dates** (`startsAt` / `endsAt`): outside that window the audience is ignored, including for visitors who already have it in memory. Comparisons ignore case and outer whitespace.
-- **Referring site** conditions take a domain (`partner.com`, subdomains and `www.` included). Browsers usually send only the origin, which is enough. Some links send nothing (apps, `rel="noreferrer"`): for an important partner, combine *referring site is partner.com* **or** *utm_source is partner* with "any condition".
-- **Audience content**: a display name, a tagline (and an image with `content: { imageCollection: 'media' }`, extra fields with `content.fields`). Write `{{audience.displayName|our clients}}` in any block text and render with `fillAudienceTokens(block, await getAudienceContent(payload, audience))`. Values always come from the CMS, never from the URL, so nobody can make your site display arbitrary text.
+- **Referring site** conditions take a domain (`partner.com`, subdomains and `www.` included), or `partner.*` for any extension (`partner.fr`, `partner.co.uk`; not `partner.evil.com`). Browsers usually send only the origin, which is enough. Some links send nothing (apps, `rel="noreferrer"`): for an important partner, combine *referring site is partner.com* **or** *utm_source is partner* with "any condition".
+- **Audience content**: a display name, a tagline, a link (text + site path or `https://` URL: `linkLabel`, `linkUrl`) (and an image with `content: { imageCollection: 'media' }`, extra fields with `content.fields`). Write `{{audience.displayName|our clients}}` in any block text and render with `fillAudienceTokens(block, await getAudienceContent(payload, audience))`. Values always come from the CMS, never from the URL, so nobody can make your site display arbitrary text.
 - A **block** is visible to *everyone* (default), *only these audiences* or *everyone except these audiences*. Typical page: the default hero set to "except Restaurant A" and a second hero set to "only Restaurant A".
 
 `personalizationField()` is exported if you want the same control on array rows or custom places. Run `generate:importmap`, `generate:types` and your migrations as usual.
@@ -156,7 +156,7 @@ export const config = { matcher: ['/((?!api|admin|_next|.*\\..*).*)'] }
 
 Next.js 15: same code in `middleware.ts`, exported as `middleware` instead of `proxy`.
 
-It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). Only audiences that exist in the manifest are ever forwarded.
+It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, then served stale while one background refresh runs, so visitors never wait for it; 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). Only audiences that exist in the manifest are ever forwarded.
 
 **Source memory.** On an *arrival* (tracked campaign parameters, or a referrer from another site) the middleware stores, in one `httpOnly` cookie (`utm_memory`, 90 days):
 
@@ -185,7 +185,7 @@ export async function proxy(request: NextRequest) {
 }
 ```
 
-`variantPath()` prefixes the path only when this public page has content for the audience (`decision.variant`); place the segment wherever your route tree expects it. `apply()` sets the cookie on the response you return; forward `requestHeaders` on every branch (`NextResponse.next({ request: { headers } })` included) or Server Components will not see the audience.
+`variantPath()` prefixes the path only when this public page has content for the audience (`decision.variant`); place the segment wherever your route tree expects it. If you put it behind a locale segment (`/fr/utm-audience/<key>`), list the locales in `rewrite: { localePrefixes: ['fr', 'en'] }` so direct hits there are redirected too (`decision.redirect`). `apply()` sets the cookie on the response you return; forward `requestHeaders` on every branch (`NextResponse.next({ request: { headers } })` included) or Server Components will not see the audience.
 
 ### 3. Render
 
@@ -227,6 +227,8 @@ personalization: {
 ```
 
 With localization enabled, the resolver is called once per locale with `{ doc, locale }` and the document read in that locale, so a variant that exists only in French lists only the French path: `({ doc, locale }) => \`${locale === 'fr' ? '/fr' : ''}/${doc.slug}\``.
+
+**Code mode, or extra pages:** fill an audience's **Pages it changes** (`/`, `/fr`…) in the admin. Those paths are added to the manifest (to the ones found in blocks, if any), so only these pages get a variant, without code. An audience with no pages and no personalized block keeps every page varied.
 
 Every collection or global that uses a personalized block needs a resolver (startup error otherwise). If the scan fails or exceeds `paths.limit` (2000 documents per collection), the manifest omits paths and every page is rewritten, so variants are never lost.
 
@@ -294,6 +296,8 @@ import { PersonalizationTracker } from 'payload-plugin-utm/tracker'
 
 <PersonalizationTracker audience={audience?.key ?? null} variant={pageHasVariant} stats />
 ```
+
+On pages that do not know the audience (static pages without a variant), omit `audience`: the endpoint resolves it from the `utm_memory` cookie sent with the beacon (`stats.cookieName` if you renamed it). `onView={(view) => track('Personalized view', view)}` calls your analytics from a Client Component.
 
 Each view is one row (day, audience, path, version shown; source, medium and campaign on entries) in a hidden `utm-personalization-views` collection: no identifier, no IP, no user agent, no cookie. The endpoint (`POST /api/utm-audiences/stats`) only accepts active audience keys and bounded labels; restrict it with `stats.allowedOrigins`. Rows older than `stats.retentionDays` (180) are deleted; the view aggregates up to `stats.reportLimit` (50 000) rows. Counts are page views, not unique visitors, and miss visitors who block the request.
 

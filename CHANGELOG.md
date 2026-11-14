@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.2.0 — unreleased (0.2.0-beta.0 on npm under the `beta` tag)
+## 0.2.0 — unreleased (0.2.0-beta.1 on npm under the `beta` tag)
+
+0.2.0-beta.1, from the BeBranded site integration: **Pages it changes** on audiences (code mode limits variants without blocks), `rewrite.localePrefixes` (variant segment behind a locale, direct hits redirected), built-in audience link (`linkLabel`, `linkUrl`), referring site `partner.*` on any extension, manifest served stale while it refreshes in the background, statistics resolve `auto` audiences from the source-memory cookie, tracker `onView` callback; `auto` is a reserved audience key.
+
 
 Opt-in content personalization by campaign audience: `utm-audiences` collection (rules on UTM or custom URL parameters, priorities), block-level visibility (`personalization.blocks`), a public or secret-protected audience manifest, Next.js middleware (`payload-plugin-utm/next`) with last-touch cookie, consent gate and static rewrite mode, `filterPersonalizedBlocks`, and a `dataLayer` tracker. Also: Next.js 16 `proxy.ts` support, `revalidatePersonalizedRoutes()` and `afterAudienceChange` for static variants, admin preview (`?utm_preview=`), an optional audience on UTM links with a live match check, campaign dates on audiences, and the editor experience: Personalization sidebar panel, one-click block variants, audience badges in block headers, and a Personalization admin view with consistency checks and a URL simulator (`payload-plugin-utm/rsc`, optional peer `@payloadcms/next`). Nothing changes for installs that do not pass `personalization`. Design notes: `docs/personalization-spec.md`.
 

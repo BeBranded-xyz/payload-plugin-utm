@@ -96,6 +96,16 @@ Found on the BeBranded site: pages are hand-written React components (no Payload
 - **Statistics** (`personalization.stats`, off by default): `<PersonalizationTracker stats />` posts a `text/plain` beacon (no preflight) per page view; the audiences collection's `POST /stats` endpoint validates it (active keys only, bounded labels, optional origin allowlist, 2 KB body) and stores one row without identifier in a hidden collection (`create` denied to the API). Entry = first view of a page load with no same-site referrer; source = `utm_source`, else referring domain. Retention purge amortized (1 % of writes). The admin view aggregates up to `reportLimit` rows in memory (`summarizeViews`), and `unregisteredCampaigns` compares UTM entries with saved links (case-insensitive; missing medium/campaign in traffic match any).
 - **Consent**: no CMP integration by design; the README declares `utm_memory` for site owners' consent managers.
 
+## 0.2.0-beta.1 (BeBranded site integration)
+
+- `pages` (text, hasMany, validated public paths) on audiences: normalized and merged with scanned block paths in the manifest; alone, they make `paths` present so only those pages are rewritten.
+- `rewrite.localePrefixes`: `/<locale>/<prefix>/<key>/rest` redirects to `/<locale>/rest`.
+- `content.linkLabel` (localized) and `content.linkUrl` (`isSafeAudienceLink`: same-site path or http(s) URL).
+- `domainMatches`: `name.*` matches `(^|.)name(.(co|com|org|net|ac|gov|edu))?.tld`.
+- Manifest: one in-flight refresh per URL; expired entries are returned immediately (stale-while-revalidate); first load still awaits.
+- Stats: `audience: "auto"` resolved server-side with `updateSourceMemory` over the active rules (cached 60 s) and the `utm_memory` cookie; never counted as personalized. `auto` joins `default` as a reserved key.
+- Tracker: optional `audience` (`auto` when omitted), `onView(detail)`.
+
 ## Out of scope (next)
 
 Geo / language conditions; Edge Config adapter; percentage A/B within an audience.

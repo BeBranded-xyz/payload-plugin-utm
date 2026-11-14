@@ -11,13 +11,33 @@ import type {
 import { utmParameters } from "../utilities.js";
 import {
   audienceDocToRule,
+  parseSourceMemory,
+  updateSourceMemory,
   audienceOperators,
   collectPersonalizedBlocks,
   isValidAudienceKey,
   normalizeHost,
+  normalizePath,
   parseAudienceManifest,
 } from "./match.js";
-import { dayOf, parseViewEvent } from "./stats.js";
+import {
+  AUTO_AUDIENCE,
+  DEFAULT_AUDIENCE,
+  dayOf,
+  parseViewEvent,
+} from "./stats.js";
+
+/** Audience links: a same-site path or an absolute http(s) URL, nothing else. */
+export function isSafeAudienceLink(value: string): boolean {
+  const text = value.trim();
+  if (/^\/(?![/\\])/.test(text)) return !/\s/.test(text);
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 /** Public path(s) of a document, or null when it is not routable. */
 export type PathResolver = (args: {
@@ -73,6 +93,12 @@ export type PersonalizationOptions = {
         allowedOrigins?: string[];
         /** Max rows aggregated by the admin view, default 50 000. */
         reportLimit?: number;
+        /**
+         * Pages that do not know the audience send `auto`: it is resolved from
+         * this source-memory cookie. Match the middleware `cookie` options.
+         */
+        cookieName?: string;
+        memoryMaxAgeSeconds?: number;
       };
   /**
    * Admin overview at `/admin/personalization` (audiences × documents × links,
@@ -561,7 +587,8 @@ function manifestEndpoint(
           conditions: true,
           startsAt: true,
           endsAt: true,
-        },
+          pages: true,
+        } as never,
       });
       const pathMap = paths
         ? await audiencePaths(req, paths, tenantWhere)
@@ -571,9 +598,25 @@ function manifestEndpoint(
           const rule = audienceDocToRule(
             doc as Record<string, unknown>,
           ) as Record<string, unknown>;
-          return pathMap
-            ? { ...rule, paths: [...(pathMap.get(String(rule.id)) ?? [])] }
-            : rule;
+          // Pages entered on the audience (code mode) plus pages found in personalized blocks.
+          const manual = (
+            Array.isArray((doc as { pages?: unknown }).pages)
+              ? ((doc as { pages: unknown[] }).pages as unknown[])
+              : []
+          )
+            .filter((path): path is string => typeof path === "string")
+            .map(normalizePath);
+          if (pathMap)
+            return {
+              ...rule,
+              paths: [
+                ...new Set([
+                  ...(pathMap.get(String(rule.id)) ?? []),
+                  ...manual,
+                ]),
+              ],
+            };
+          return manual.length ? { ...rule, paths: [...new Set(manual)] } : rule;
         }),
       });
       return Response.json(manifest, {
@@ -654,7 +697,7 @@ export function audiencesCollection(
         },
         validate: (value: unknown) =>
           isValidAudienceKey(value) ||
-          "Use lowercase letters, digits and hyphens (max 64). “default” is reserved.",
+          "Use lowercase letters, digits and hyphens (max 64). “default” and “auto” are reserved.",
       },
       {
         name: "match",
@@ -771,10 +814,12 @@ export function audiencesCollection(
                       .split(",")
                       .some(
                         (item) =>
-                          !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(normalizeHost(item)),
+                          !/^[a-z0-9.-]+\.([a-z]{2,}|\*)$/.test(
+                            normalizeHost(item),
+                          ),
                       )
                   )
-                    return "Enter a domain such as partner.com (subdomains are included).";
+                    return "Enter a domain such as partner.com (subdomains are included), or partner.* for any extension.";
                   return true;
                 },
               } as Field,
@@ -834,6 +879,29 @@ export function audiencesCollection(
             "The end date must be after the start date."
           );
         },
+      } as Field,
+      {
+        name: "pages",
+        type: "text",
+        hasMany: true,
+        maxRows: 200,
+        label: { en: "Pages it changes", fr: "Pages concernées" },
+        admin: {
+          position: "sidebar",
+          description: {
+            en: "Public paths this audience changes, e.g. / and /fr. In static mode only these pages get a variant (pages from personalized blocks are added). Empty: detected from blocks, or every page.",
+            fr: "Chemins publics que cette audience modifie, ex. / et /fr. En mode statique, seules ces pages ont une variante (les pages des blocs personnalisés s’ajoutent). Vide : détectées depuis les blocs, sinon toutes les pages.",
+          },
+        },
+        validate: (value: unknown) =>
+          !Array.isArray(value) ||
+          value.every(
+            (path) =>
+              typeof path === "string" &&
+              path.length <= 300 &&
+              /^\/(?!\/)[^\s?#]*$/.test(path),
+          ) ||
+          "Enter public paths starting with /, without query or #.",
       } as Field,
       {
         name: "state",
@@ -899,6 +967,29 @@ export function audiencesCollection(
             maxLength: 500,
             label: { en: "Tagline", fr: "Accroche" },
           },
+          {
+            name: "linkLabel",
+            type: "text",
+            localized: true,
+            maxLength: 120,
+            label: { en: "Link text", fr: "Texte du lien" },
+          },
+          {
+            name: "linkUrl",
+            type: "text",
+            maxLength: 2048,
+            label: { en: "Link", fr: "Lien" },
+            admin: {
+              description: {
+                en: "A site path (/contact) or a full https:// URL.",
+                fr: "Un chemin du site (/contact) ou une adresse https:// complète.",
+              },
+            },
+            validate: (value: unknown) =>
+              !value ||
+              (typeof value === "string" && isSafeAudienceLink(value)) ||
+              "Enter a path starting with / or an http(s) URL.",
+          } as Field,
           ...(options.content?.imageCollection
             ? [
                 {
@@ -942,6 +1033,8 @@ export function audiencesCollection(
 
 export type StatsSettings = {
   slug: string;
+  cookieName: string;
+  memoryMaxAgeSeconds: number;
   retentionDays: number;
   allowedOrigins?: string[];
   reportLimit: number;
@@ -954,6 +1047,8 @@ export function statsSettings(
   const custom = options.stats === true ? {} : options.stats;
   return {
     slug: custom.slug ?? "utm-personalization-views",
+    cookieName: custom.cookieName ?? "utm_memory",
+    memoryMaxAgeSeconds: custom.memoryMaxAgeSeconds ?? 60 * 60 * 24 * 90,
     retentionDays: custom.retentionDays ?? 180,
     allowedOrigins: custom.allowedOrigins,
     reportLimit: custom.reportLimit ?? 50_000,
@@ -998,8 +1093,12 @@ export function viewsCollection(settings: StatsSettings): CollectionConfig {
   };
 }
 
-let knownKeys: { keys: Set<string>; expires: number; slug: string } | null =
-  null;
+let knownKeys: {
+  keys: Set<string>;
+  manifest: ReturnType<typeof parseAudienceManifest>;
+  expires: number;
+  slug: string;
+} | null = null;
 
 function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint {
   return {
@@ -1035,20 +1134,50 @@ function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint
             limit: 5000,
             pagination: false,
             where: { state: { equals: "active" } },
-            select: { key: true },
+            select: {
+              key: true,
+              priority: true,
+              match: true,
+              conditions: true,
+              startsAt: true,
+              endsAt: true,
+            },
+          });
+          const manifest = parseAudienceManifest({
+            audiences: (result.docs as Record<string, unknown>[]).map(
+              audienceDocToRule,
+            ),
           });
           knownKeys = {
             slug: audiencesSlug,
             expires: Date.now() + 60_000,
-            keys: new Set(
-              (result.docs as { key?: unknown }[])
-                .map((doc) => doc.key)
-                .filter((key): key is string => typeof key === "string"),
-            ),
+            manifest,
+            keys: new Set(manifest.audiences.map((audience) => audience.key)),
           };
         }
         const event = parseViewEvent(parsed, knownKeys.keys);
         if (!event) return new Response(null, { status: 400 });
+        // The page did not know the audience (static page without variant):
+        // resolve it from the visitor's source memory, sent with the beacon.
+        if (event.audience === AUTO_AUDIENCE) {
+          const cookie = (req.headers.get("cookie") ?? "")
+            .split(/;\s*/)
+            .find((part) => part.startsWith(`${settings.cookieName}=`));
+          let value = cookie?.slice(settings.cookieName.length + 1);
+          try {
+            value = value ? decodeURIComponent(value) : value;
+          } catch {
+            value = undefined;
+          }
+          const resolved = updateSourceMemory({
+            memory: parseSourceMemory(value),
+            touch: null,
+            manifest: knownKeys.manifest,
+            maxAgeSeconds: settings.memoryMaxAgeSeconds,
+          }).audience;
+          event.audience = resolved?.key ?? DEFAULT_AUDIENCE;
+          event.variant = false;
+        }
         const now = new Date();
         await req.payload.create({
           collection: settings.slug as CollectionSlug,

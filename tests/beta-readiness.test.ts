@@ -156,7 +156,7 @@ test("stats endpoint records valid views anonymously and rejects the rest", asyn
       text: async () => body,
       payload: {
         logger: { error: () => {} },
-        find: async () => ({ docs: [{ key: "coudac" }] }),
+        find: async () => ({ docs: [{ id: 1, key: "coudac", conditions: [{ parameter: "referrer", operator: "equals", value: "coudac.com" }] }] }),
         create: async ({ data }: { data: Record<string, unknown> }) => {
           created.push(data);
           return data;

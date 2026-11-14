@@ -16,8 +16,14 @@ export type PersonalizationViewDetail = {
 };
 
 type Props = {
-  /** Active audience key, or null for default content. */
-  audience: string | null;
+  /**
+   * Active audience key, or null for default content. Omit it on pages that do
+   * not know the audience (static pages without a variant): the statistics
+   * endpoint resolves it from the visitor's source-memory cookie.
+   */
+  audience?: string | null;
+  /** Called once per view, e.g. to send it to Vercel Analytics or another tool. */
+  onView?: (detail: PersonalizationViewDetail) => void;
   /** This page showed content specific to the audience (counted as a personalized view). */
   variant?: boolean;
   /** dataLayer event name, default `utm_personalization`. */
@@ -50,6 +56,7 @@ let lastView = "";
  */
 export function PersonalizationTracker({
   audience,
+  onView,
   variant = false,
   eventName = "utm_personalization",
   dataLayer = true,
@@ -70,7 +77,7 @@ export function PersonalizationTracker({
         );
     entered = true;
     const detail: PersonalizationViewDetail = {
-      audience: audience ?? "default",
+      audience: audience === undefined ? "auto" : (audience ?? "default"),
       path: pathname || window.location.pathname,
       variant: Boolean(audience && variant),
       ...origin,
@@ -83,6 +90,11 @@ export function PersonalizationTracker({
         utm_audience: detail.audience,
         utm_variant: detail.variant,
       });
+    }
+    try {
+      onView?.(detail);
+    } catch {
+      // A failing analytics callback never breaks the page.
     }
     window.dispatchEvent(
       new CustomEvent<PersonalizationViewDetail>(PERSONALIZATION_EVENT, {
@@ -102,6 +114,7 @@ export function PersonalizationTracker({
           () => undefined,
         );
     }
+    // onView is read at send time; a new function identity is not a new view.
   }, [audience, variant, eventName, dataLayer, stats, previewParam, pathname]);
   return null;
 }
