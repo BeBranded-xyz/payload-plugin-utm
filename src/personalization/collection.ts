@@ -41,6 +41,11 @@ export type PersonalizationOptions = {
   }) => void | Promise<void>;
   /** Preview links in the admin. Must match the middleware `previewParam`. */
   preview?: false | { siteUrl?: string; param?: string };
+  /**
+   * Admin overview at `/admin/personalization` (audiences × documents × links,
+   * consistency alerts, URL simulator). `false` disables the view and its nav link.
+   */
+  adminView?: false | { path?: `/${string}` };
   overrides?: (collection: CollectionConfig) => CollectionConfig;
 };
 export type AudienceCollectionContext = {
@@ -66,6 +71,7 @@ const operatorLabels: Record<
 export function personalizationField(
   audiencesSlug = "utm-audiences",
   name = "personalization",
+  locale: "en" | "fr" = "en",
 ): Field {
   return {
     name,
@@ -126,9 +132,92 @@ export function personalizationField(
           return true;
         },
       } as Field,
+      {
+        name: "variantAction",
+        type: "ui",
+        admin: {
+          components: {
+            Field: {
+              path: "payload-plugin-utm/client#BlockVariantAction",
+              clientProps: { locale, audiencesSlug, fieldName: name },
+            },
+          },
+        },
+      } as Field,
     ],
   };
 }
+
+const labelOf = (block: Block): unknown => {
+  const singular = block.labels?.singular;
+  return typeof singular === "string" ||
+    (singular && typeof singular === "object")
+    ? singular
+    : block.slug;
+};
+
+/** True when these fields hold a block carrying the personalization group. */
+function containsPersonalizedBlock(
+  fields: Field[],
+  personalizedSlugs: ReadonlySet<string>,
+): boolean {
+  return fields.some((field) => {
+    if (field.type === "blocks")
+      return [...(field.blocks ?? []), ...(field.blockReferences ?? [])].some(
+        (block) =>
+          typeof block === "string"
+            ? personalizedSlugs.has(block)
+            : personalizedSlugs.has(block.slug) ||
+              containsPersonalizedBlock(block.fields, personalizedSlugs),
+      );
+    if (field.type === "tabs")
+      return field.tabs.some((tab) =>
+        containsPersonalizedBlock(tab.fields, personalizedSlugs),
+      );
+    return (
+      "fields" in field &&
+      Array.isArray(field.fields) &&
+      containsPersonalizedBlock(field.fields, personalizedSlugs)
+    );
+  });
+}
+
+/** Top-level field names whose data holds personalized blocks (for `select`). */
+export function personalizedFieldNames(
+  fields: Field[],
+  personalizedSlugs: ReadonlySet<string>,
+): string[] {
+  return fields.flatMap((field): string[] => {
+    if (field.type === "tabs")
+      return field.tabs.flatMap((tab) =>
+        "name" in tab && tab.name
+          ? containsPersonalizedBlock(tab.fields, personalizedSlugs)
+            ? [tab.name]
+            : []
+          : personalizedFieldNames(tab.fields, personalizedSlugs),
+      );
+    if ("name" in field && field.name)
+      return containsPersonalizedBlock([field], personalizedSlugs)
+        ? [field.name]
+        : [];
+    return "fields" in field && Array.isArray(field.fields)
+      ? personalizedFieldNames(field.fields, personalizedSlugs)
+      : [];
+  });
+}
+
+export type PersonalizationUi = {
+  locale: "en" | "fr";
+  previewParam: string | null;
+  siteUrl?: string;
+};
+
+export type PersonalizationTarget = {
+  kind: "collection" | "global";
+  slug: string;
+  /** Top-level fields to select when reading documents. */
+  fields: string[];
+};
 
 /** Recursively add the personalization group to matching blocks. */
 function withBlockFields(
@@ -165,46 +254,129 @@ function withBlockFields(
   });
 }
 
+export const PANEL_FIELD = "utmPersonalizationPanel";
+
 export function addPersonalizationToBlocks(
   config: Config,
   targets: readonly string[] | "all",
   audiencesSlug: string,
-): Config {
+  ui: PersonalizationUi = { locale: "en", previewParam: "utm_preview" },
+): {
+  config: Config;
+  targets: PersonalizationTarget[];
+  blockLabels: Record<string, unknown>;
+} {
   const wanted = (slug: string) => targets === "all" || targets.includes(slug);
+  const personalizedSlugs = new Set<string>();
+  const blockLabels: Record<string, unknown> = {};
   // Shared block objects map to one shared result; every block is traversed
   // so target blocks nested inside non-target blocks are reached too.
   const seen = new WeakMap<Block, Block>();
   const traverse = (block: Block): Block => {
     const cached = seen.get(block);
     if (cached) return cached;
-    const nested = {
+    const nested: Block = {
       ...block,
       fields: withBlockFields(block.fields, traverse),
     };
-    const result =
-      !wanted(block.slug) ||
-      nested.fields.some(
-        (field) => "name" in field && field.name === "personalization",
+    let result = nested;
+    if (wanted(block.slug)) {
+      personalizedSlugs.add(block.slug);
+      blockLabels[block.slug] = labelOf(block);
+      if (
+        !nested.fields.some(
+          (field) => "name" in field && field.name === "personalization",
+        )
       )
-        ? nested
-        : {
-            ...nested,
-            fields: [...nested.fields, personalizationField(audiencesSlug)],
-          };
+        result = {
+          ...result,
+          fields: [
+            ...result.fields,
+            personalizationField(audiencesSlug, "personalization", ui.locale),
+          ],
+        };
+      // Badge in the block header, unless the app already customizes it.
+      if (!block.admin?.components?.Label && !block.admin?.components?.Block)
+        result = {
+          ...result,
+          admin: {
+            ...result.admin,
+            components: {
+              ...result.admin?.components,
+              Label: {
+                path: "payload-plugin-utm/client#PersonalizedBlockLabel",
+                clientProps: {
+                  locale: ui.locale,
+                  audiencesSlug,
+                  blockLabel: labelOf(block),
+                  showBlockName: !block.admin?.disableBlockName,
+                },
+              },
+            },
+          },
+        };
+    }
     seen.set(block, result);
     return result;
   };
+  const blocks = config.blocks?.map(traverse);
+  const collections = config.collections?.map((collection) => ({
+    ...collection,
+    fields: withBlockFields(collection.fields, traverse),
+  }));
+  const globals = config.globals?.map((global) => ({
+    ...global,
+    fields: withBlockFields(global.fields, traverse),
+  }));
+  const found: PersonalizationTarget[] = [];
+  const panel = (fields: Field[]): Field[] =>
+    fields.some((field) => "name" in field && field.name === PANEL_FIELD)
+      ? fields
+      : [
+          ...fields,
+          {
+            name: PANEL_FIELD,
+            type: "ui",
+            admin: {
+              position: "sidebar",
+              components: {
+                Field: {
+                  path: "payload-plugin-utm/client#PersonalizationPanel",
+                  clientProps: {
+                    locale: ui.locale,
+                    audiencesSlug,
+                    previewParam: ui.previewParam,
+                    siteUrl: ui.siteUrl,
+                    blockLabels,
+                  },
+                },
+              },
+            },
+          } as Field,
+        ];
+  const withPanels = <T extends { slug: string; fields: Field[] }>(
+    entities: T[] | undefined,
+    kind: PersonalizationTarget["kind"],
+  ): T[] | undefined =>
+    entities?.map((entity) => {
+      if (!containsPersonalizedBlock(entity.fields, personalizedSlugs))
+        return entity;
+      found.push({
+        kind,
+        slug: entity.slug,
+        fields: personalizedFieldNames(entity.fields, personalizedSlugs),
+      });
+      return { ...entity, fields: panel(entity.fields) };
+    });
   return {
-    ...config,
-    blocks: config.blocks?.map(traverse),
-    collections: config.collections?.map((collection) => ({
-      ...collection,
-      fields: withBlockFields(collection.fields, traverse),
-    })),
-    globals: config.globals?.map((global) => ({
-      ...global,
-      fields: withBlockFields(global.fields, traverse),
-    })),
+    config: {
+      ...config,
+      blocks,
+      collections: withPanels(collections, "collection"),
+      globals: withPanels(globals, "global"),
+    },
+    targets: found,
+    blockLabels,
   };
 }
 
@@ -244,7 +416,14 @@ function manifestEndpoint(
         limit,
         sort: "priority",
         where: { and: where },
-        select: { key: true, priority: true, match: true, conditions: true },
+        select: {
+          key: true,
+          priority: true,
+          match: true,
+          conditions: true,
+          startsAt: true,
+          endsAt: true,
+        },
       });
       const manifest = parseAudienceManifest({
         audiences: result.docs.map((doc) =>
@@ -448,6 +627,44 @@ export function audiencesCollection(
           },
         },
       },
+      {
+        name: "startsAt",
+        type: "date",
+        label: { en: "Campaign starts", fr: "Début de campagne" },
+        admin: {
+          position: "sidebar",
+          date: { pickerAppearance: "dayAndTime" },
+          description: {
+            en: "Optional. The audience is ignored before this date.",
+            fr: "Facultatif. L’audience est ignorée avant cette date.",
+          },
+        },
+      },
+      {
+        name: "endsAt",
+        type: "date",
+        label: { en: "Campaign ends", fr: "Fin de campagne" },
+        admin: {
+          position: "sidebar",
+          date: { pickerAppearance: "dayAndTime" },
+          description: {
+            en: "Optional. From this date, visitors see the default content again (within about a minute).",
+            fr: "Facultatif. À partir de cette date, les visiteurs revoient le contenu par défaut (sous une minute environ).",
+          },
+        },
+        validate: (
+          value: unknown,
+          { siblingData }: { siblingData?: unknown },
+        ) => {
+          const start = (siblingData as { startsAt?: unknown } | undefined)
+            ?.startsAt;
+          if (!value || !start) return true;
+          return (
+            Date.parse(String(value)) > Date.parse(String(start)) ||
+            "The end date must be after the start date."
+          );
+        },
+      } as Field,
       {
         name: "state",
         type: "select",

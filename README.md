@@ -129,7 +129,7 @@ utmPlugin({
 
 This adds **Marketing → Campaign audiences** and a **Personalization** group to the listed blocks, wherever they are used (collections, globals, nested blocks, `config.blocks`).
 
-- An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term` or any other URL parameter (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch and a priority (lower wins). Comparisons ignore case and outer whitespace.
+- An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term` or any other URL parameter (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch, a priority (lower wins) and optional **campaign dates** (`startsAt` / `endsAt`): outside that window the audience is ignored, including for visitors who already have it in their cookie. Comparisons ignore case and outer whitespace.
 - A **block** is visible to *everyone* (default), *only these audiences* or *everyone except these audiences*. Typical page: the default hero set to "except Restaurant A" and a second hero set to "only Restaurant A".
 
 `personalizationField()` is exported if you want the same control on array rows or custom places. Run `generate:importmap`, `generate:types` and your migrations as usual.
@@ -186,6 +186,15 @@ It invalidates every route under the prefix; variants are regenerated on their n
 - Each audience has an **Aperçu / Preview** panel: enter a page path and open it as that audience or as the default visitor. It uses `?utm_preview=<key>` (or `default`), which the middleware honours for that request only, without changing the visitor's cookie. Set `personalization.preview: { siteUrl: 'https://www.example.com' }` when the admin is on another origin, `preview.param` if you renamed `previewParam`, or `preview: false` to hide it. Anyone can use the parameter; it only shows content that is already public.
 - The panel also suggests the campaign parameters that trigger the audience and links to the UTM links that target it.
 - With personalization on, **UTM links** get an optional *Personalized audience* field. The sidebar tells editors which audience the link will actually trigger (priorities included) and warns when it does not trigger the selected one or when that audience is archived.
+
+### Editor experience
+
+- **Personalization panel** in the sidebar of every collection or global that uses a personalized block: audiences used on the document with their block count, 👁 preview as each audience or as the default visitor (the page path is pre-filled from a `slug` field when there is one), and warnings for blocks restricted to no audience, to a deleted or archived audience, or to an ended campaign.
+- **Create a variant in one click**, from the panel ("Personalize a block…") or from the *Create a variant for…* menu inside each block: the block is duplicated right below it, the copy is shown **only** to the chosen audience and the original stops showing to it (it becomes "everyone except…", or the audience is added to/removed from its existing list). Edit the copy, then save as usual.
+- **Badges in block headers**: "🎯 Restaurant A", "Except Restaurant A" or "⚠ no audience", next to the block number, type and editable name. Blocks that already define `admin.components.Label` or `admin.components.Block` keep their own header.
+- **Personalization view** at `/admin/personalization` (nav link 🎯 *Personalization*): every audience with its status (active, scheduled, ended, archived), the documents and number of blocks it changes, its UTM links and priority; a list of consistency checks (unused audiences, blocks targeting archived or deleted audiences, UTM links that do not trigger their audience); and a **URL simulator**: paste a campaign URL to see the audience it triggers and which personalized blocks each document shows or hides, with a preview link. The view reads documents through Payload's default `find` (no `draft` flag) with the signed-in user's permissions (first 200 documents per collection). Move it with `personalization.adminView: { path: '/campaigns' }` or remove it with `adminView: false`.
+
+The view uses `DefaultTemplate` from `@payloadcms/next`, already installed in any app that serves the Payload admin with Next.js.
 
 ### Measurement, privacy, SEO
 

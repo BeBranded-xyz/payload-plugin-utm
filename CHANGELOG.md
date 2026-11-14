@@ -2,7 +2,7 @@
 
 ## 0.2.0 — unreleased
 
-Opt-in content personalization by campaign audience: `utm-audiences` collection (rules on UTM or custom URL parameters, priorities), block-level visibility (`personalization.blocks`), a public or secret-protected audience manifest, Next.js middleware (`payload-plugin-utm/next`) with last-touch cookie, consent gate and static rewrite mode, `filterPersonalizedBlocks`, and a `dataLayer` tracker. Also: Next.js 16 `proxy.ts` support, `revalidatePersonalizedRoutes()` and `afterAudienceChange` for static variants, admin preview (`?utm_preview=`), and an optional audience on UTM links with a live match check. Nothing changes for installs that do not pass `personalization`. Design notes: `docs/personalization-spec.md`.
+Opt-in content personalization by campaign audience: `utm-audiences` collection (rules on UTM or custom URL parameters, priorities), block-level visibility (`personalization.blocks`), a public or secret-protected audience manifest, Next.js middleware (`payload-plugin-utm/next`) with last-touch cookie, consent gate and static rewrite mode, `filterPersonalizedBlocks`, and a `dataLayer` tracker. Also: Next.js 16 `proxy.ts` support, `revalidatePersonalizedRoutes()` and `afterAudienceChange` for static variants, admin preview (`?utm_preview=`), an optional audience on UTM links with a live match check, campaign dates on audiences, and the editor experience: Personalization sidebar panel, one-click block variants, audience badges in block headers, and a Personalization admin view with consistency checks and a URL simulator (`payload-plugin-utm/rsc`, optional peer `@payloadcms/next`). Nothing changes for installs that do not pass `personalization`. Design notes: `docs/personalization-spec.md`.
 
 ## 0.1.0 — 2026-11-02
 

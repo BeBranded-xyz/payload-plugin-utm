@@ -63,6 +63,14 @@ Editors place "Hero Restaurant A" (`only` → restaurant-a) next to the default 
 - Preview: `?utm_preview=<key|default>` forces an audience for one request without touching the cookie; admin panel with path input, example campaign parameters and a link to the targeting UTM links.
 - UTM links: optional `audience` relationship and a sidebar check that resolves the link's parameters against active audiences (priorities included) via the authenticated REST API, so it works even when the manifest is secret.
 
+## Editor experience (inspired by FocusReactive's in-editor Variants panel and admin dashboard)
+
+- **Campaign dates**: optional `startsAt` / `endsAt` on audiences, published in the manifest. `resolveAudience` and `findAudience` skip audiences outside their window (end exclusive), so an ended campaign stops for remembered visitors too; staleness is bounded by the middleware cache TTL.
+- **Sidebar panel** (`ui` field `utmPersonalizationPanel`) injected into every collection/global whose fields contain a targeted block (also through tabs, groups, arrays and nested blocks). It reads the live form state, so it reflects unsaved edits.
+- **One-click variants**: `DUPLICATE_ROW` on the block's parent field, then `UPDATE` of both personalization groups (and the copy's `blockName`). The split is the pure `variantPersonalization()`: everyone → except [A]; except […] → except […, A]; only […, A] → only […]. IDs keep the database type (numbers on SQL adapters).
+- **Block header badge**: a `Label` component that re-renders Payload's default header (number, block pill, editable `blockName`) plus an audience pill. Never applied to blocks that customize `Label` or `Block`.
+- **Admin view** (`payload-plugin-utm/rsc#PersonalizationView`, wrapped in `DefaultTemplate`): local API with `overrideAccess: false` and the request user; default `find` (no `draft` flag), `select` limited to the top-level fields that can hold personalized blocks, 200 documents per collection. Pure helpers `collectPersonalizedBlocks`, `summarizeDocument`, `consistencyAlerts` and `simulateCampaignUrl` hold the logic and are unit-tested.
+
 ## Out of scope (next)
 
 Referrer / geo / language conditions; Edge Config adapter; percentage A/B within an audience.

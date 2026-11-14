@@ -411,11 +411,72 @@ function withPersonalization(
     throw new Error(
       "utmPlugin: change the audiences slug with personalization.audiencesSlug, not overrides.",
     );
+  const viewPath =
+    options.adminView === false
+      ? null
+      : (options.adminView?.path ?? "/personalization");
+  if (viewPath !== null && !/^\/[a-z0-9][a-z0-9/-]*$/.test(viewPath))
+    throw new Error(
+      "utmPlugin: personalization.adminView.path must look like /personalization.",
+    );
+  const ui = {
+    locale: context.locale,
+    previewParam:
+      options.preview === false
+        ? null
+        : (options.preview?.param ?? "utm_preview"),
+    siteUrl: options.preview ? options.preview.siteUrl : undefined,
+  };
   const withCollection: Config = {
     ...config,
     collections: [...(config.collections ?? []), audiences],
   };
-  return blocks === "all" || blocks.length
-    ? addPersonalizationToBlocks(withCollection, blocks, slug)
-    : withCollection;
+  const {
+    config: result,
+    targets,
+    blockLabels,
+  } = blocks === "all" || blocks.length
+    ? addPersonalizationToBlocks(withCollection, blocks, slug, ui)
+    : { config: withCollection, targets: [], blockLabels: {} };
+  if (viewPath === null) return result;
+  const views = result.admin?.components?.views ?? {};
+  if (views.utmPersonalization)
+    throw new Error(
+      'utmPlugin: admin view "utmPersonalization" already exists.',
+    );
+  return {
+    ...result,
+    admin: {
+      ...result.admin,
+      components: {
+        ...result.admin?.components,
+        views: {
+          ...views,
+          utmPersonalization: {
+            path: viewPath as `/${string}`,
+            exact: true,
+            Component: {
+              path: "payload-plugin-utm/rsc#PersonalizationView",
+              serverProps: {
+                pluginOptions: {
+                  ...ui,
+                  audiencesSlug: slug,
+                  linksSlug: context.linksSlug,
+                  targets,
+                  blockLabels,
+                },
+              },
+            },
+          },
+        },
+        afterNavLinks: [
+          ...(result.admin?.components?.afterNavLinks ?? []),
+          {
+            path: "payload-plugin-utm/client#PersonalizationNavLink",
+            clientProps: { locale: context.locale, path: viewPath },
+          },
+        ],
+      },
+    },
+  };
 }
