@@ -355,6 +355,8 @@ pnpm check
 pnpm pack
 ```
 
+**Demo app** (`dev/`, Payload + Next.js 16 + SQLite, French and English, drafts, statistics on): `pnpm build && pnpm dev`, then open `http://localhost:3000/admin` (seeded user `dev@example.com` / `test`, local demo only). It uses the built `dist/`, so rebuild after changing `src/`. Try `/?utm_source=coudac`, a visit with `Referer: https://coudac.com`, `/en`, the Personalization view and the 👁 preview links.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md). PRs improving accessibility, translations, adapters and test coverage are welcome.
 
 Built by [BeBranded](https://github.com/BeBranded-xyz). Licensed under [MIT](LICENSE).

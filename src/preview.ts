@@ -10,7 +10,8 @@
  * then `personalization.preview.draftRoute: '/api/utm-preview'`. Pages read
  * drafts when `(await draftMode()).isEnabled` (`draft: true` in `payload.find`).
  */
-import type { SanitizedConfig } from "payload";
+import { draftMode } from "next/headers.js";
+import { getPayload, type SanitizedConfig } from "payload";
 import { isValidAudienceKey } from "./personalization/match.js";
 
 export type DraftPreviewRouteOptions = {
@@ -47,7 +48,6 @@ export function createDraftPreviewRoute(options: DraftPreviewRouteOptions) {
     )
       return new Response("Invalid preview request.", { status: 400 });
 
-    const { getPayload } = await import("payload");
     const payload = await getPayload({ config: options.config });
     const { user } = await payload.auth({ headers: request.headers });
     if (!user)
@@ -56,13 +56,17 @@ export function createDraftPreviewRoute(options: DraftPreviewRouteOptions) {
         { status: 401 },
       );
 
-    const { draftMode } = await import("next/headers.js");
     (await draftMode()).enable();
     const target = new URL(path, url.origin);
     if (audience !== null) target.searchParams.set(param, audience);
-    // Next's redirect() carries the draft-mode cookie; a relative target keeps
-    // the visitor on the host that received it.
-    const { redirect } = await import("next/navigation.js");
-    return redirect(target.pathname + target.search);
+    // Next adds the draft-mode cookie to the returned response. A relative
+    // target keeps the visitor on the host that received it.
+    return new Response(null, {
+      status: 307,
+      headers: {
+        location: target.pathname + target.search,
+        "cache-control": "no-store",
+      },
+    });
   };
 }

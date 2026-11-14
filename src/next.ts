@@ -271,7 +271,8 @@ export function createPersonalizationResolver(
       changed && memory
         ? {
             name: cookieName,
-            value: serializeSourceMemory(memory),
+            // Next encodes cookie values itself; pass raw JSON to avoid double encoding.
+            value: JSON.stringify(memory),
             options: {
               maxAge,
               path: "/",

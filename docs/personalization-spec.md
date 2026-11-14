@@ -91,7 +91,7 @@ Found on the BeBranded site: pages are hand-written React components (no Payload
 
 ## Beta readiness
 
-- **Locales**: `content.displayName` / `content.tagline` are localized; the paths scan reads every locale (`fallbackLocale: false`) and calls the resolver with `{ doc, locale }`.
+- **Locales**: `content.displayName` / `content.tagline` are localized; the paths scan reads every locale with the configured fallback (as pages render it) and calls the resolver with `{ doc, locale }`.
 - **Draft preview**: `createDraftPreviewRoute({ config })` (`payload-plugin-utm/preview`) authenticates the Payload user from the request cookies, accepts only same-site paths and valid keys, enables draft mode, redirects with `?utm_preview=`. Admin links use `preview.draftRoute` when set.
 - **Statistics** (`personalization.stats`, off by default): `<PersonalizationTracker stats />` posts a `text/plain` beacon (no preflight) per page view; the audiences collection's `POST /stats` endpoint validates it (active keys only, bounded labels, optional origin allowlist, 2 KB body) and stores one row without identifier in a hidden collection (`create` denied to the API). Entry = first view of a page load with no same-site referrer; source = `utm_source`, else referring domain. Retention purge amortized (1 % of writes). The admin view aggregates up to `reportLimit` rows in memory (`summarizeViews`), and `unregisteredCampaigns` compares UTM entries with saved links (case-insensitive; missing medium/campaign in traffic match any).
 - **Consent**: no CMP integration by design; the README declares `utm_memory` for site owners' consent managers.

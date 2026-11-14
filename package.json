@@ -85,7 +85,9 @@
     "test": "tsx --test tests/*.test.ts",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "prepack": "pnpm build",
-    "format": "prettier --write src tests examples package.json tsconfig*.json"
+    "format": "prettier --write src tests examples package.json tsconfig*.json",
+    "dev": "next dev dev",
+    "dev:importmap": "cd dev && PAYLOAD_CONFIG_PATH=./payload.config.ts payload generate:importmap"
   },
   "engines": {
     "node": ">=22"
@@ -100,6 +102,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@payloadcms/db-sqlite": "3.92.0",
     "@payloadcms/next": "3.92.0",
     "@payloadcms/plugin-multi-tenant": "3.92.0",
     "@payloadcms/ui": "3.92.0",

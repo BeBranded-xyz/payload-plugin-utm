@@ -468,10 +468,11 @@ async function audiencePaths(
       }
   };
   try {
-    // Localized layouts differ per locale: read and resolve each locale separately.
+    // Localized layouts differ per locale: read each locale as the site renders it
+    // (with the configured fallback) and resolve its path.
     for (const locale of locales) {
       const localeArgs = locale
-        ? { locale: locale as never, fallbackLocale: false as never }
+        ? { locale: locale as never }
         : {};
       for (const [collection, resolve] of Object.entries(
         paths.collections ?? {},

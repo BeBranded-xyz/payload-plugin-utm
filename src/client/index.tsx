@@ -900,7 +900,7 @@ export function PersonalizationPanel({
           </label>
         </>
       )}
-      {summary.warnings.map((warning, index) => {
+      {Array.isArray(audiences) && summary.warnings.map((warning, index) => {
         const target = blocks.findIndex((item) => item.path === warning.path);
         const name =
           target >= 0 ? labelOf(blocks[target]!, target) : warning.path;

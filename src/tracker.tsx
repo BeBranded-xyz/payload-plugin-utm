@@ -29,10 +29,14 @@ type Props = {
    * `true` posts to `/api/utm-audiences/stats`; a string is the endpoint URL.
    */
   stats?: boolean | string;
+  /** Views with this URL parameter (admin previews) are not recorded in the statistics. Default `utm_preview`. */
+  previewParam?: string;
 };
 
 // First view of this page load; later client-side navigations are not entries.
 let entered = false;
+// Last view sent: effects can run twice for one view (React Strict Mode, remounts).
+let lastView = "";
 
 /**
  * One event per page view: `window.dataLayer`, a `utm:personalization`
@@ -50,9 +54,13 @@ export function PersonalizationTracker({
   eventName = "utm_personalization",
   dataLayer = true,
   stats = false,
+  previewParam = "utm_preview",
 }: Props) {
   const pathname = usePathname();
   useEffect(() => {
+    const signature = `${pathname}|${audience}|${variant}`;
+    if (signature === lastView) return;
+    lastView = signature;
     const origin = entered
       ? { entry: false }
       : entrySource(
@@ -81,7 +89,10 @@ export function PersonalizationTracker({
         detail,
       }),
     );
-    if (stats) {
+    const preview = new URLSearchParams(window.location.search).has(
+      previewParam,
+    );
+    if (stats && !preview) {
       const url =
         typeof stats === "string" ? stats : "/api/utm-audiences/stats";
       const body = JSON.stringify(detail);
@@ -91,6 +102,6 @@ export function PersonalizationTracker({
           () => undefined,
         );
     }
-  }, [audience, variant, eventName, dataLayer, stats, pathname]);
+  }, [audience, variant, eventName, dataLayer, stats, previewParam, pathname]);
   return null;
 }

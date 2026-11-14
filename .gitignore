@@ -6,3 +6,6 @@ dist/
 coverage/
 .DS_Store
 *.tsbuildinfo
+dev/dev.db*
+dev/.next/
+dev/next-env.d.ts

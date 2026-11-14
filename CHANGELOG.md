@@ -10,6 +10,8 @@ Composition: `createPersonalizationResolver()` returns the decision (audience, h
 
 Before the beta: localized audience content and per-locale page paths; draft previews (`createDraftPreviewRoute`, `preview.draftRoute`); opt-in anonymous statistics in the Personalization view (entries, views and personalized views per audience and page, entry sources) with detection of UTM used on the site but not created in Payload; `utm:personalization` window event and `utm_variant` in the dataLayer; `<SourceMemoryFields />` / `sourceMemoryFields()` for lead forms; cookie declaration in the README.
 
+Found by the demo app (`dev/`): the memory cookie was URI-encoded twice (Next encodes cookie values; old cookies still read), the paths scan now follows the configured locale fallback like rendered pages, the draft preview route no longer imports `next/navigation` (unparsable in Turbopack route handlers), the tracker no longer counts a view twice under React Strict Mode nor records admin previews, and the editor panel no longer flags audiences as deleted while they load.
+
 ## 0.1.0 — 2026-11-02
 
 Initial community release: Payload collection plugin, live generation/copy, EN/FR controls, optional presets and related content, searchable inventory and archiving, URL policy options, permission-aware bounded CSV export, and dependency-free helpers for campaign variants.

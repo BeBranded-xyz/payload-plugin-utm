@@ -766,10 +766,11 @@ function sanitizeTouch(value: unknown): SourceTouch | undefined {
 export function parseSourceMemory(value: unknown): SourceMemory | null {
   if (typeof value !== "string" || !value || value.length > 4096) return null;
   try {
-    const raw = JSON.parse(decodeURIComponent(value)) as Record<
-      string,
-      unknown
-    >;
+    // Raw JSON (cookie, decoded by the framework) or URI-encoded (header, legacy cookie).
+    const text = value.trimStart().startsWith("{")
+      ? value
+      : decodeURIComponent(value);
+    const raw = JSON.parse(text) as Record<string, unknown>;
     if (!raw || raw.v !== 1) return null;
     const memory: SourceMemory = { v: 1 };
     for (const key of ["f", "l", "s"] as const) {

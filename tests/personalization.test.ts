@@ -425,7 +425,11 @@ test("middleware resolves from URL, forwards headers and remembers the source", 
     "untracked params dropped",
   );
   assert.deepEqual(memory.f, memory.l);
-  assert.equal(forwarded(response, "x-utm-source-memory"), cookie.value);
+  assert.deepEqual(
+    parseSourceMemory(forwarded(response, "x-utm-source-memory")),
+    memory,
+  );
+  assert.ok(cookie.value.startsWith("{"), "raw JSON, encoded once by Next");
   // Internal navigation: audience from memory, no Set-Cookie (cacheable).
   const next = await middleware()(request("/contact", asCookie(cookie.value)));
   assert.equal(forwarded(next, "x-utm-audience"), "restaurant-a");
