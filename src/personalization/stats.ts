@@ -4,7 +4,12 @@
  * No identifier, no IP, no user agent: one row per page view.
  * Pure functions, safe on the edge.
  */
-import { isValidAudienceKey, normalizeHost, normalizePath } from "./match.js";
+import {
+  domainMatches,
+  isValidAudienceKey,
+  normalizeHost,
+  normalizePath,
+} from "./match.js";
 
 export const DEFAULT_AUDIENCE = "default";
 /** Sent by pages that do not know the audience; the server resolves it from the source-memory cookie. */
@@ -214,9 +219,7 @@ export function summarizeViews(
         Number(a.audience === DEFAULT_AUDIENCE) -
           Number(b.audience === DEFAULT_AUDIENCE) || b.views - a.views,
     ),
-    pages: [...pages.values()]
-      .sort(byViews)
-      .slice(0, options.pageLimit ?? 50),
+    pages: [...pages.values()].sort(byViews).slice(0, options.pageLimit ?? 50),
     sources: [...sources.values()]
       .sort((a, b) => b.entries - a.entries)
       .slice(0, options.sourceLimit ?? 50),
@@ -256,8 +259,11 @@ export function unregisteredCampaigns(
     known.some(
       (link) =>
         link.source === norm(row.source) &&
-        (!row.medium || link.medium === norm(row.medium)) &&
-        (!row.campaign || link.campaign === norm(row.campaign)),
+        // A campaign without medium or campaign covers every value of it.
+        (!link.medium || !row.medium || link.medium === norm(row.medium)) &&
+        (!link.campaign ||
+          !row.campaign ||
+          link.campaign === norm(row.campaign)),
     );
   const found = new Map<string, UnregisteredCampaign>();
   for (const row of rows) {
@@ -274,6 +280,57 @@ export function unregisteredCampaigns(
         lastDay: null as string | null,
       }),
     );
+    item.entries++;
+    if (row.day) {
+      if (!item.firstDay || row.day < item.firstDay) item.firstDay = row.day;
+      if (!item.lastDay || row.day > item.lastDay) item.lastDay = row.day;
+    }
+  }
+  return [...found.values()]
+    .sort((a, b) => b.entries - a.entries)
+    .slice(0, limit);
+}
+
+export type UnregisteredReferrer = {
+  domain: string;
+  entries: number;
+  firstDay: string | null;
+  lastDay: string | null;
+};
+
+/** Search engines: their visitors are organic traffic, not a partner to recognize. */
+const SEARCH_ENGINES =
+  /(^|\.)(google|bing|duckduckgo|yahoo|ecosia|qwant|baidu|yandex|brave|startpage)\.[a-z.]+$/;
+
+/**
+ * Sites that send visitors without UTM and that no campaign recognizes yet
+ * (`referrerDomains`, `name.*` included). Search engines are left out.
+ */
+export function unregisteredReferrers(
+  rows: readonly Partial<ViewRecord>[],
+  links: readonly { referrerDomains?: unknown }[],
+  limit = 100,
+): UnregisteredReferrer[] {
+  const known = links.flatMap((link) =>
+    Array.isArray(link.referrerDomains)
+      ? link.referrerDomains
+          .filter((d): d is string => typeof d === "string")
+          .map(normalizeHost)
+      : [],
+  );
+  const found = new Map<string, UnregisteredReferrer>();
+  for (const row of rows) {
+    if (!row.entry || row.utm) continue;
+    const domain = normalizeHost(row.source);
+    if (!domain || domain === "(direct)" || !domain.includes(".")) continue;
+    if (SEARCH_ENGINES.test(domain)) continue;
+    if (known.some((expected) => domainMatches(domain, expected))) continue;
+    const item = bump(found, domain, () => ({
+      domain,
+      entries: 0,
+      firstDay: null as string | null,
+      lastDay: null as string | null,
+    }));
     item.entries++;
     if (row.day) {
       if (!item.firstDay || row.day < item.firstDay) item.firstDay = row.day;

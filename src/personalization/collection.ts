@@ -49,8 +49,6 @@ export type PathResolver = (args: {
 }) => string | readonly string[] | null | undefined;
 
 export type PersonalizationOptions = {
-  /** Default `utm-audiences`. */
-  audiencesSlug?: string;
   /** Block slugs that receive the visibility controls, or `'all'`. */
   blocks?: readonly string[] | "all";
   manifest?: {
@@ -151,7 +149,7 @@ const operatorLabels: Record<
 };
 
 export function personalizationField(
-  audiencesSlug = "utm-audiences",
+  audiencesSlug = "utm-links",
   name = "personalization",
   locale: "en" | "fr" = "en",
 ): Field {
@@ -195,7 +193,9 @@ export function personalizationField(
         type: "relationship",
         relationTo: audiencesSlug as CollectionSlug,
         hasMany: true,
-        label: { en: "Audiences", fr: "Audiences" },
+        // Only campaigns that personalize the site.
+        filterOptions: { personalize: { equals: true } },
+        label: { en: "Campaigns", fr: "Campagnes" },
         admin: {
           condition: (_, sibling) =>
             Boolean(sibling?.mode && sibling.mode !== "all"),
@@ -499,9 +499,7 @@ async function audiencePaths(
     // Localized layouts differ per locale: read each locale as the site renders it
     // (with the configured fallback) and resolve its path.
     for (const locale of locales) {
-      const localeArgs = locale
-        ? { locale: locale as never }
-        : {};
+      const localeArgs = locale ? { locale: locale as never } : {};
       for (const [collection, resolve] of Object.entries(
         paths.collections ?? {},
       )) {
@@ -571,11 +569,14 @@ export async function buildAudienceManifest(
     tenantWhere?: Where;
   } = {},
 ): Promise<AudienceManifest> {
-  const stored = (payload.config?.custom?.[MANIFEST_SETTINGS_KEY] ?? {}) as
-    Partial<ManifestSettings>;
-  const slug = options.audiencesSlug ?? stored.audiencesSlug ?? "utm-audiences";
+  const stored = (payload.config?.custom?.[MANIFEST_SETTINGS_KEY] ??
+    {}) as Partial<ManifestSettings>;
+  const slug = options.audiencesSlug ?? stored.audiencesSlug ?? "utm-links";
   const paths = options.paths ?? stored.paths;
-  const where: Where[] = options.where ?? [{ state: { equals: "active" } }];
+  const where: Where[] = [
+    ...(options.where ?? [{ state: { equals: "active" } }]),
+    { personalize: { equals: true } },
+  ];
   // Public, fixed projection: arbitrary filters would expose private fields.
   const result = await payload.find({
     collection: slug as CollectionSlug,
@@ -592,6 +593,10 @@ export async function buildAudienceManifest(
       startsAt: true,
       endsAt: true,
       pages: true,
+      source: true,
+      medium: true,
+      campaign: true,
+      referrerDomains: true,
     } as never,
   });
   const pathMap = paths
@@ -599,9 +604,10 @@ export async function buildAudienceManifest(
     : null;
   return parseAudienceManifest({
     audiences: result.docs.map((doc) => {
-      const rule = audienceDocToRule(
-        doc as Record<string, unknown>,
-      ) as Record<string, unknown>;
+      const rule = audienceDocToRule(doc as Record<string, unknown>) as Record<
+        string,
+        unknown
+      >;
       // Pages entered on the audience (code mode) plus pages found in personalized blocks.
       const manual = (
         Array.isArray((doc as { pages?: unknown }).pages)
@@ -1086,8 +1092,10 @@ export type StatsSettings = {
 export function statsSettings(
   options: PersonalizationOptions,
 ): StatsSettings | null {
-  if (!options.stats) return null;
-  const custom = options.stats === true ? {} : options.stats;
+  // On by default with personalization (detected campaigns need it); `stats: false` opts out.
+  if (options.stats === false) return null;
+  const custom =
+    options.stats === true || options.stats === undefined ? {} : options.stats;
   return {
     slug: custom.slug ?? "utm-personalization-views",
     cookieName: custom.cookieName ?? "utm_memory",
@@ -1100,8 +1108,7 @@ export function statsSettings(
 
 /** Stored page views. Written only by the stats endpoint, never by the API. */
 export function viewsCollection(settings: StatsSettings): CollectionConfig {
-  const authenticated = ({ req }: { req: PayloadRequest }) =>
-    Boolean(req.user);
+  const authenticated = ({ req }: { req: PayloadRequest }) => Boolean(req.user);
   const text = (name: string, index = false): Field => ({
     name,
     type: "text",
@@ -1143,7 +1150,10 @@ let knownKeys: {
   slug: string;
 } | null = null;
 
-function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint {
+function statsEndpoint(
+  audiencesSlug: string,
+  settings: StatsSettings,
+): Endpoint {
   return {
     path: "/stats",
     method: "post",
@@ -1176,7 +1186,12 @@ function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint
             depth: 0,
             limit: 5000,
             pagination: false,
-            where: { state: { equals: "active" } },
+            where: {
+              and: [
+                { state: { equals: "active" } },
+                { personalize: { equals: true } },
+              ],
+            },
             select: {
               key: true,
               priority: true,
@@ -1184,7 +1199,11 @@ function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint
               conditions: true,
               startsAt: true,
               endsAt: true,
-            },
+              source: true,
+              medium: true,
+              campaign: true,
+              referrerDomains: true,
+            } as never,
           });
           const manifest = parseAudienceManifest({
             audiences: (result.docs as Record<string, unknown>[]).map(
@@ -1249,4 +1268,209 @@ function statsEndpoint(audiencesSlug: string, settings: StatsSettings): Endpoint
       return new Response(null, { status: 204 });
     },
   };
+}
+
+const domainPattern = /^[a-z0-9.-]+\.([a-z]{2,}|\*)$/;
+
+/** Audience key from a campaign: `source[-campaign]`, slugged, max 64 chars. */
+export function campaignAudienceKey(
+  source: unknown,
+  campaign?: unknown,
+): string {
+  const slug = (value: unknown) =>
+    typeof value === "string"
+      ? value
+          .normalize("NFKD")
+          .replace(/[̀-ͯ]/g, "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-/, "")
+          .replace(/-$/, "")
+      : "";
+  const parts = [slug(source), slug(campaign)].filter(Boolean);
+  let key = parts.join("-").slice(0, 64).replace(/-$/, "");
+  if (!key || !/^[a-z0-9]/.test(key)) key = `campaign-${key}`.slice(0, 64);
+  return isValidAudienceKey(key) ? key : `${key}-1`.slice(0, 64);
+}
+
+/**
+ * Personalization on UTM campaigns: the "Personalize the site" tab (audience
+ * fields), the hooks that keep the key and caches in sync, and the manifest /
+ * statistics endpoints. One menu entry: a campaign is a UTM link that can also
+ * personalize the site.
+ */
+export function campaignPersonalization(
+  linksSlug: string,
+  options: PersonalizationOptions,
+  context: AudienceCollectionContext,
+): {
+  fields: Field[];
+  hooks: NonNullable<CollectionConfig["hooks"]>;
+  endpoints: Endpoint[];
+} {
+  const base = audiencesCollection(linksSlug, options, context);
+  const pick = (name: string) => {
+    const field = base.fields.find((f) => "name" in f && f.name === name);
+    if (!field) throw new Error(`utmPlugin: missing audience field ${name}`);
+    return field as Field & { admin?: Record<string, unknown> };
+  };
+  const enabled = (data: Record<string, unknown> | undefined) =>
+    data?.personalize === true;
+  const onlyWhenEnabled = <F extends Field>(field: F): F =>
+    ({
+      ...field,
+      admin: {
+        ...(("admin" in field && field.admin) || {}),
+        position: undefined,
+        condition: (data: Record<string, unknown>) => enabled(data),
+      },
+    }) as F;
+  const keyField = pick("key") as Field & {
+    validate?: unknown;
+    required?: boolean;
+  };
+  const conditions = pick("conditions") as Field & { minRows?: number };
+  const content = pick("content") as Field & { name: string };
+  const fields: Field[] = [
+    {
+      name: "personalize",
+      type: "checkbox",
+      defaultValue: false,
+      index: true,
+      label: { en: "Personalize the site", fr: "Personnaliser le site" },
+      admin: {
+        description: {
+          en: "Visitors arriving with this campaign's UTM values (or from the sites below) are remembered 90 days and see the content targeted at this campaign.",
+          fr: "Les visiteurs qui arrivent avec les UTM de cette campagne (ou depuis les sites ci-dessous) sont mémorisés 90 jours et voient le contenu destiné à cette campagne.",
+        },
+      },
+    },
+    onlyWhenEnabled({
+      name: "referrerDomains",
+      type: "text",
+      hasMany: true,
+      maxRows: 50,
+      label: {
+        en: "Also recognize visitors coming from",
+        fr: "Reconnaître aussi les visiteurs venant de",
+      },
+      admin: {
+        description: {
+          en: "Sites that link to you without UTM, e.g. coudac.com (subdomains included) or coudac.* (any extension).",
+          fr: "Sites qui renvoient vers vous sans UTM, ex. coudac.com (sous-domaines compris) ou coudac.* (toutes extensions).",
+        },
+      },
+      validate: (value: unknown) =>
+        !Array.isArray(value) ||
+        value.every(
+          (domain) =>
+            typeof domain === "string" &&
+            domainPattern.test(normalizeHost(domain)),
+        ) ||
+        "Enter domains such as partner.com or partner.*",
+    } as Field),
+    onlyWhenEnabled({ ...pick("pages") } as Field),
+    onlyWhenEnabled({
+      ...content,
+      name: "audienceContent",
+    } as Field),
+    onlyWhenEnabled({
+      type: "row",
+      fields: [
+        {
+          ...pick("startsAt"),
+          admin: { ...pick("startsAt").admin, position: undefined },
+        },
+        {
+          ...pick("endsAt"),
+          admin: { ...pick("endsAt").admin, position: undefined },
+        },
+        {
+          ...pick("priority"),
+          admin: { ...pick("priority").admin, position: undefined },
+        },
+      ] as Field[],
+    } as Field),
+    onlyWhenEnabled({
+      ...keyField,
+      required: false,
+      admin: {
+        ...keyField.admin,
+        description: {
+          en: "Generated from source and campaign. Used in cookies and URLs; changing it forgets remembered visitors.",
+          fr: "Généré depuis la source et la campagne. Utilisé dans les cookies et les URL ; le modifier oublie les visiteurs mémorisés.",
+        },
+      },
+      validate: (value: unknown) =>
+        value == null ||
+        value === "" ||
+        isValidAudienceKey(value) ||
+        "Use lowercase letters, digits and hyphens (max 64). “default” and “auto” are reserved.",
+    } as Field),
+    onlyWhenEnabled({
+      type: "collapsible",
+      label: { en: "Advanced rules", fr: "Règles avancées" },
+      admin: {
+        initCollapsed: true,
+        description: {
+          en: "Optional extra ways to recognize visitors (e.g. ?ref=partner). They are combined with OR with the UTM values and sites above.",
+          fr: "Facultatif : d’autres façons de reconnaître les visiteurs (ex. ?ref=partenaire), en plus (OU) des UTM et des sites ci-dessus.",
+        },
+      },
+      fields: [pick("match"), { ...conditions, required: false, minRows: 0 }],
+    } as Field),
+    ...base.fields
+      .filter((f) => "name" in f && f.name === "preview")
+      .map((f) => onlyWhenEnabled(f)),
+  ];
+
+  const hooks: NonNullable<CollectionConfig["hooks"]> = {
+    beforeValidate: [
+      async ({ data, originalDoc, req }) => {
+        if (!data) return data;
+        const merged = { ...originalDoc, ...data } as Record<string, unknown>;
+        if (merged.personalize !== true || merged.key) return data;
+        // Unique key from source and campaign, suffixed on conflict.
+        const wanted = campaignAudienceKey(merged.source, merged.campaign);
+        let key = wanted;
+        for (let n = 2; n < 50; n++) {
+          const taken = await req.payload.find({
+            collection: linksSlug as CollectionSlug,
+            req,
+            overrideAccess: true,
+            depth: 0,
+            limit: 1,
+            where: {
+              and: [
+                { key: { equals: key } },
+                ...(originalDoc?.id !== undefined
+                  ? [{ id: { not_equals: originalDoc.id } }]
+                  : []),
+              ],
+            },
+          });
+          if (!taken.docs.length) break;
+          key = `${wanted.slice(0, 60)}-${n}`;
+        }
+        return { ...data, key };
+      },
+    ],
+    afterChange: [
+      ...(base.hooks?.afterChange ?? []).map(
+        (hook) =>
+          ((args: Parameters<typeof hook>[0]) =>
+            args.doc?.personalize || args.previousDoc?.personalize
+              ? hook(args)
+              : args.doc) as typeof hook,
+      ),
+    ],
+    afterDelete: [
+      ...(base.hooks?.afterDelete ?? []).map(
+        (hook) =>
+          ((args: Parameters<typeof hook>[0]) =>
+            args.doc?.personalize ? hook(args) : args.doc) as typeof hook,
+      ),
+    ],
+  };
+  return { fields, hooks, endpoints: base.endpoints || [] };
 }

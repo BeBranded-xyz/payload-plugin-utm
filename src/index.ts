@@ -12,7 +12,7 @@ import type {
 import { csvEndpoint } from "./csv-endpoint.js";
 import {
   addPersonalizationToBlocks,
-  audiencesCollection,
+  campaignPersonalization,
   MANIFEST_SETTINGS_KEY,
   statsSettings,
   viewsCollection,
@@ -105,8 +105,8 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
     let collection: CollectionConfig = {
       slug,
       labels: {
-        singular: { en: "UTM link", fr: "Lien UTM" },
-        plural: { en: "UTM links", fr: "Liens UTM" },
+        singular: { en: "UTM campaign", fr: "Campagne UTM" },
+        plural: { en: "UTM campaigns", fr: "Campagnes UTM" },
       },
       admin: {
         useAsTitle: "title",
@@ -128,8 +128,8 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
           "campaignId",
         ],
         description: {
-          en: "Create and organize campaign links. Analytics results are not collected by this plugin.",
-          fr: "Créez et retrouvez vos liens de campagne. Ce plugin ne collecte pas les résultats Analytics.",
+          en: "Your campaigns: UTM values, the link to share, and optionally a personalized site for their visitors.",
+          fr: "Vos campagnes : leurs UTM, le lien à partager et, si vous le souhaitez, un site personnalisé pour leurs visiteurs.",
         },
       },
       access: {
@@ -148,10 +148,18 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
         {
           name: "destination",
           type: "text",
-          required: true,
           maxLength: 8192,
           label: { en: "Destination URL", fr: "URL de destination" },
-          validate: (value: unknown) => validateDestination(value, policy),
+          admin: {
+            description: {
+              en: "Optional: fill it to get a link to share. Without it, the campaign still recognizes its visitors.",
+              fr: "Facultatif : renseignez-la pour obtenir un lien à partager. Sans elle, la campagne reconnaît quand même ses visiteurs.",
+            },
+          },
+          validate: (value: unknown) =>
+            value == null || value === ""
+              ? true
+              : validateDestination(value, policy),
         },
         {
           type: "row",
@@ -161,18 +169,16 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
               { en: "Source · utm_source", fr: "Source · utm_source" },
               true,
             ),
-            param(
-              "medium",
-              { en: "Medium · utm_medium", fr: "Support · utm_medium" },
-              true,
-            ),
+            param("medium", {
+              en: "Medium · utm_medium",
+              fr: "Support · utm_medium",
+            }),
           ],
         },
-        param(
-          "campaign",
-          { en: "Campaign · utm_campaign", fr: "Campagne · utm_campaign" },
-          true,
-        ),
+        param("campaign", {
+          en: "Campaign · utm_campaign",
+          fr: "Campagne · utm_campaign",
+        }),
         {
           name: "generatedUrl",
           type: "text",
@@ -262,50 +268,6 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
       endpoints:
         options.csvExport === false ? [] : [csvEndpoint(slug, maxRows)],
     };
-    if (options.personalization) {
-      const audiencesSlug =
-        options.personalization.audiencesSlug ?? "utm-audiences";
-      collection = {
-        ...collection,
-        fields: [
-          ...collection.fields,
-          {
-            name: "audience",
-            type: "relationship",
-            relationTo: audiencesSlug as CollectionSlug,
-            index: true,
-            label: {
-              en: "Personalized audience",
-              fr: "Audience personnalisée",
-            },
-            admin: {
-              position: "sidebar",
-              description: {
-                en: "Optional: the audience this link is meant to trigger.",
-                fr: "Facultatif : l’audience que ce lien doit déclencher.",
-              },
-            },
-          } as Field,
-          {
-            name: "audienceCheck",
-            type: "ui",
-            admin: {
-              position: "sidebar",
-              components: {
-                Field: {
-                  path: "payload-plugin-utm/client#AudienceMatchNotice",
-                  clientProps: {
-                    locale: options.locale ?? "en",
-                    audiencesSlug,
-                    policy,
-                  },
-                },
-              },
-            },
-          } as Field,
-        ],
-      };
-    }
     if (options.overrides) collection = options.overrides(collection);
     if (collection.slug !== slug)
       throw new Error(
@@ -357,13 +319,12 @@ function withPersonalization(
   options: PersonalizationOptions,
   context: AudienceCollectionContext,
 ): Config {
-  const slug = options.audiencesSlug ?? "utm-audiences";
-  if (!/^[a-z][a-z0-9-]*$/.test(slug))
+  // Audiences live on the UTM campaigns themselves (one menu entry).
+  if ((options as { audiencesSlug?: unknown }).audiencesSlug !== undefined)
     throw new Error(
-      "utmPlugin: personalization.audiencesSlug must contain lowercase letters, digits and hyphens.",
+      "utmPlugin: personalization.audiencesSlug was removed in 0.2.0-beta.4: audiences now live on UTM campaigns (Personalize the site tab).",
     );
-  if (config.collections?.some((collection) => collection.slug === slug))
-    throw new Error(`utmPlugin: collection "${slug}" already exists.`);
+  const slug = context.linksSlug;
   const blocks = options.blocks ?? [];
   if (
     blocks !== "all" &&
@@ -484,12 +445,114 @@ function withPersonalization(
         "utmPlugin: personalization.stats.allowedOrigins must be exact origins, e.g. https://example.com.",
       );
   }
-  let audiences = audiencesCollection(slug, options, context);
-  if (options.overrides) audiences = options.overrides(audiences);
-  if (audiences.slug !== slug)
-    throw new Error(
-      "utmPlugin: change the audiences slug with personalization.audiencesSlug, not overrides.",
+  const personalization = campaignPersonalization(slug, options, context);
+  const linkCollections = (config.collections ?? []).map((collection) => {
+    if (collection.slug !== slug) return collection;
+    // Title on top; link fields, personalization and statistics in tabs; sidebar fields stay.
+    const isSidebar = (field: Field) =>
+      "admin" in field &&
+      (field.admin as { position?: string } | undefined)?.position ===
+        "sidebar";
+    const isTitle = (field: Field) => "name" in field && field.name === "title";
+    const head = collection.fields.filter(isTitle);
+    const sidebar = collection.fields.filter(
+      (field) => !isTitle(field) && isSidebar(field),
     );
+    const main = collection.fields.filter(
+      (field) => !isTitle(field) && !isSidebar(field),
+    );
+    const fields: Field[] = [
+      ...head,
+      {
+        type: "tabs",
+        tabs: [
+          { label: { en: "Link", fr: "Lien" }, fields: main },
+          {
+            label: { en: "Personalize the site", fr: "Personnaliser le site" },
+            fields: personalization.fields,
+          },
+          ...(stats
+            ? [
+                {
+                  label: { en: "Statistics", fr: "Statistiques" },
+                  fields: [
+                    {
+                      name: "campaignStats",
+                      type: "ui",
+                      admin: {
+                        components: {
+                          Field: {
+                            path: "payload-plugin-utm/client#CampaignStats",
+                            clientProps: {
+                              locale: context.locale,
+                              statsSlug: stats.slug,
+                            },
+                          },
+                        },
+                      },
+                    } as Field,
+                  ],
+                },
+              ]
+            : []),
+        ],
+      } as Field,
+      ...sidebar,
+    ];
+    return {
+      ...collection,
+      fields,
+      admin: {
+        ...collection.admin,
+        defaultColumns: [
+          ...(collection.admin?.defaultColumns ?? []).filter(
+            (column) => column !== "createdAt",
+          ),
+          "personalize",
+        ],
+        components: {
+          ...collection.admin?.components,
+          ...(stats
+            ? {
+                beforeList: [
+                  ...(collection.admin?.components?.beforeList ?? []),
+                  {
+                    path: "payload-plugin-utm/rsc#DetectedCampaigns",
+                    serverProps: {
+                      pluginOptions: {
+                        locale: context.locale,
+                        linksSlug: slug,
+                        statsSlug: stats.slug,
+                        statsLimit: stats.reportLimit,
+                      },
+                    },
+                  },
+                ],
+              }
+            : {}),
+        },
+      },
+      hooks: {
+        ...collection.hooks,
+        beforeValidate: [
+          ...(collection.hooks?.beforeValidate ?? []),
+          ...(personalization.hooks.beforeValidate ?? []),
+        ],
+        afterChange: [
+          ...(collection.hooks?.afterChange ?? []),
+          ...(personalization.hooks.afterChange ?? []),
+        ],
+        afterDelete: [
+          ...(collection.hooks?.afterDelete ?? []),
+          ...(personalization.hooks.afterDelete ?? []),
+        ],
+      },
+      endpoints: [
+        ...(Array.isArray(collection.endpoints) ? collection.endpoints : []),
+        ...personalization.endpoints,
+      ],
+    } as CollectionConfig;
+  });
   const viewPath =
     options.adminView === false
       ? null
@@ -519,8 +582,7 @@ function withPersonalization(
       },
     },
     collections: [
-      ...(config.collections ?? []),
-      audiences,
+      ...linkCollections,
       ...(stats ? [viewsCollection(stats)] : []),
     ],
   };

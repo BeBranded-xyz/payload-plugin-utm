@@ -22,7 +22,7 @@ import {
 } from "./personalization/match.js";
 
 export type PersonalizationMiddlewareOptions = {
-  /** Absolute manifest URL, e.g. `https://site.com/api/utm-audiences/manifest`. */
+  /** Absolute manifest URL, e.g. `https://site.com/api/utm-links/manifest`. */
   manifestUrl?: string | URL | ((request: NextRequest) => string | URL);
   /** Custom loader (Edge Config, KV, static JSON…). Takes precedence over `manifestUrl`. */
   loadManifest?: (request: NextRequest) => Promise<unknown> | unknown;
@@ -117,7 +117,7 @@ async function getManifest(
       ? String(options.manifestUrl(request))
       : options.manifestUrl
         ? String(options.manifestUrl)
-        : new URL("/api/utm-audiences/manifest", request.url).toString();
+        : new URL("/api/utm-links/manifest", request.url).toString();
   const cached = cache.get(url);
   if (cached && cached.expires > Date.now()) return cached.manifest;
   // Stale-while-revalidate: once loaded, requests never wait for a refresh.

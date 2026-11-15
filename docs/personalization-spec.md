@@ -110,6 +110,14 @@ Found on the BeBranded site: pages are hand-written React components (no Payload
 
 - `buildAudienceManifest(payload, options?)`: the endpoint's logic as a function (fixed projection, manual pages, block paths); settings (`audiencesSlug`, `limit`, `paths`) stored on `config.custom.utmPersonalizationManifest`. Measured on the BeBranded site (`next start`): first request after start 0.57 s including render, then ~10 ms; the build bundles Payload into the Node.js proxy.
 
+## 0.2.0-beta.4: campaigns
+
+- No audiences collection: the links collection (labelled *UTM campaigns*) is wrapped in tabs (Link / Personalize the site / Statistics); title and sidebar fields stay outside. `campaignPersonalization()` reuses the audience field definitions (key, pages, content renamed `audienceContent`, dates, priority, advanced `match` + `conditions`), shown only when `personalize` is checked.
+- Rule derivation (`audienceDocToRule` on a doc with `source`): groups = [UTM equals (source, medium and campaign when set)], one group per referring domain, advanced rules (one group if `all`, one per condition if `any`). `audienceMatches` evaluates OR of ANDs when `groups` is present; `conditions` keeps the flat list for tracked parameters.
+- Key: generated in `beforeValidate` from `source[-campaign]` when personalization is on and the key is empty, suffixed `-2…` on conflict.
+- Manifest, stats endpoint and `getAudienceContent` filter `personalize = true`.
+- Detection (`DetectedCampaigns`, `beforeList`): entries of the last 30 days; `unregisteredCampaigns` (a campaign without medium/campaign covers all of them) and `unregisteredReferrers` (search engines and known referring domains left out); creation through the authenticated REST API, then redirect to the new campaign.
+
 ## Out of scope (next)
 
 Geo / language conditions; Edge Config adapter; percentage A/B within an audience.

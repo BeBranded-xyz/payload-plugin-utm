@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { allFields } from "./helpers.js";
 import { test } from "node:test";
 import type { Block, Config, PayloadRequest } from "payload";
 import { utmPlugin } from "../src/index.js";
@@ -130,24 +131,24 @@ test("stats and draft route options are validated; views collection is private",
   assert.throws(() => build({ blocks: ["hero"], preview: { draftRoute: "api/x" } }), /draftRoute/);
   assert.throws(() => build({ blocks: ["hero"], stats: { retentionDays: 0 } }), /retentionDays/);
   assert.throws(() => build({ blocks: ["hero"], stats: { allowedOrigins: ["https://a.com/x"] } }), /allowedOrigins/);
-  assert.throws(() => build({ blocks: ["hero"], stats: { slug: "utm-audiences" } }), /stats.slug/);
-  const off = build({ blocks: ["hero"] });
+  assert.throws(() => build({ blocks: ["hero"], stats: { slug: "utm-links" } }), /stats.slug/);
+  const off = build({ blocks: ["hero"], stats: false });
   assert.equal(off.collections!.some((c) => c.slug === "utm-personalization-views"), false);
   const config = build({ blocks: ["hero"], stats: true, preview: { draftRoute: "/api/utm-preview" } });
   const views = config.collections!.find((c) => c.slug === "utm-personalization-views")!;
   assert.equal(views.admin?.hidden, true);
   const create = views.access!.create as (args: unknown) => boolean;
   assert.equal(create({ req: { user: { id: 1 } } }), false, "only the endpoint writes");
-  const audiences = config.collections!.find((c) => c.slug === "utm-audiences")!;
-  const content = audiences.fields.find((f) => "name" in f && f.name === "content") as { fields: { name: string; localized?: boolean }[] };
+  const audiences = config.collections!.find((c) => c.slug === "utm-links")!;
+  const content = allFields(audiences).find((f) => "name" in f && f.name === "audienceContent") as { fields: { name: string; localized?: boolean }[] };
   assert.equal(content.fields.find((f) => f.name === "displayName")!.localized, true);
-  const preview = audiences.fields.find((f) => "name" in f && f.name === "preview") as { admin: { components: { Field: { clientProps: Record<string, unknown> } } } };
+  const preview = allFields(audiences).find((f) => "name" in f && f.name === "preview") as { admin: { components: { Field: { clientProps: Record<string, unknown> } } } };
   assert.equal(preview.admin.components.Field.clientProps.draftRoute, "/api/utm-preview");
 });
 
 test("stats endpoint records valid views anonymously and rejects the rest", async () => {
   const config = build({ blocks: ["hero"], stats: { allowedOrigins: ["https://site.test"] } });
-  const audiences = config.collections!.find((c) => c.slug === "utm-audiences")!;
+  const audiences = config.collections!.find((c) => c.slug === "utm-links")!;
   const handler = ((audiences.endpoints || []) as { path: string; handler: (req: PayloadRequest) => Promise<Response> }[]).find((e) => e.path === "/stats")!.handler;
   const created: Record<string, unknown>[] = [];
   const req = (body: string, origin = "https://site.test") =>
@@ -188,7 +189,7 @@ test("manifest paths are resolved per locale when localization is on", async () 
       },
     },
   );
-  const audiences = config.collections!.find((c) => c.slug === "utm-audiences")!;
+  const audiences = config.collections!.find((c) => c.slug === "utm-links")!;
   const handler = ((audiences.endpoints || []) as { path: string; handler: (req: PayloadRequest) => Promise<Response> }[]).find((e) => e.path === "/manifest")!.handler;
   const layoutByLocale: Record<string, unknown[]> = {
     fr: [{ blockType: "hero", personalization: { mode: "only", audiences: [1] } }],

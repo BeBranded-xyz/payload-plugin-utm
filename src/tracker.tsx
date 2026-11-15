@@ -32,7 +32,7 @@ type Props = {
   dataLayer?: boolean;
   /**
    * Record the view in the admin statistics (`personalization.stats`).
-   * `true` posts to `/api/utm-audiences/stats`; a string is the endpoint URL.
+   * `true` posts to `/api/utm-links/stats`; a string is the endpoint URL.
    */
   stats?: boolean | string;
   /** Views with this URL parameter (admin previews) are not recorded in the statistics. Default `utm_preview`. */
@@ -106,7 +106,7 @@ export function PersonalizationTracker({
     );
     if (stats && !preview) {
       const url =
-        typeof stats === "string" ? stats : "/api/utm-audiences/stats";
+        typeof stats === "string" ? stats : "/api/utm-links/stats";
       const body = JSON.stringify(detail);
       // text/plain beacon: no CORS preflight, survives navigation.
       if (!navigator.sendBeacon?.(url, body))

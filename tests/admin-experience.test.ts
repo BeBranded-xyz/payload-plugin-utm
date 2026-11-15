@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { Block, CollectionConfig, Config, Field } from "payload";
 import { NextRequest } from "next/server.js";
 import { utmPlugin } from "../src/index.js";
+import { allFields, endpointOf } from "./helpers.js";
 import { createPersonalizationMiddleware } from "../src/next.js";
 import {
   collectPersonalizedBlocks,
@@ -93,12 +94,12 @@ test("endsAt must be after startsAt and both are published in the manifest", asy
     collections: [],
   } as unknown as Config);
   const audiences = result.collections!.find(
-    (c) => c.slug === "utm-audiences",
+    (c) => c.slug === "utm-links",
   )!;
-  const endsAt = named(audiences.fields, "endsAt") as unknown as {
+  const endsAt = named(allFields(audiences), "endsAt") as unknown as {
     validate: (v: unknown, o: { siblingData?: unknown }) => true | string;
   };
-  assert(named(audiences.fields, "startsAt"));
+  assert(named(allFields(audiences), "startsAt"));
   assert.equal(endsAt.validate(null, { siblingData: {} }), true);
   assert.equal(
     endsAt.validate("2026-12-05", { siblingData: { startsAt: "2026-12-01" } }),
@@ -109,7 +110,7 @@ test("endsAt must be after startsAt and both are published in the manifest", asy
     true,
   );
   let select: Record<string, unknown> | undefined;
-  await (audiences.endpoints || [])[0]!.handler({
+  await endpointOf(audiences, "/manifest").handler({
     headers: new Headers(),
     query: {},
     payload: {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { allFields } from "./helpers.js";
 import { beforeEach, test } from "node:test";
 import type { Config, PayloadRequest } from "payload";
 import { NextRequest } from "next/server.js";
@@ -18,7 +19,7 @@ import {
 type Handler = (req: PayloadRequest) => Promise<Response>;
 const endpoint = (config: Config, path: string) =>
   (
-    (config.collections!.find((c) => c.slug === "utm-audiences")!.endpoints ||
+    (config.collections!.find((c) => c.slug === "utm-links")!.endpoints ||
       []) as { path: string; handler: Handler }[]
   ).find((e) => e.path === path)!.handler;
 
@@ -42,8 +43,8 @@ test("audience links accept site paths and http(s) URLs only", () => {
 
 test("pages entered on an audience limit its variants (code mode)", async () => {
   const config = utmPlugin({ personalization: {} })({} as Config) as Config;
-  const audiences = config.collections!.find((c) => c.slug === "utm-audiences")!;
-  const pages = audiences.fields.find((f) => "name" in f && f.name === "pages") as {
+  const audiences = config.collections!.find((c) => c.slug === "utm-links")!;
+  const pages = allFields(audiences).find((f) => "name" in f && f.name === "pages") as {
     validate: (v: unknown) => unknown;
   };
   assert.equal(pages.validate(["/", "/fr"]), true);
@@ -153,7 +154,7 @@ test("stats endpoint resolves `auto` from the source-memory cookie", async () =>
 
 test("buildAudienceManifest reads the database directly with the plugin settings", async () => {
   const { buildAudienceManifest } = await import("../src/index.js");
-  const config = utmPlugin({ personalization: { audiencesSlug: "audiences", manifest: { limit: 7 } } })({} as Config) as Config;
+  const config = utmPlugin({ collectionSlug: "campaigns", personalization: { manifest: { limit: 7 } } })({} as Config) as Config;
   let seen: Record<string, unknown> = {};
   const payload = {
     config: { custom: config.custom },
@@ -164,7 +165,8 @@ test("buildAudienceManifest reads the database directly with the plugin settings
     },
   };
   const manifest = await buildAudienceManifest(payload as never);
-  assert.equal(seen.collection, "audiences");
+  assert.equal(seen.collection, "campaigns");
+  assert.deepEqual((seen.where as { and: unknown[] }).and.at(-1), { personalize: { equals: true } });
   assert.equal(seen.limit, 7);
   assert.equal(seen.overrideAccess, true);
   assert.deepEqual(manifest.audiences.map((a) => [a.key, a.paths]), [["coudac", ["/fr"]]]);

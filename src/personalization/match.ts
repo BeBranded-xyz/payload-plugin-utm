@@ -24,6 +24,12 @@ export type AudienceRule = {
   priority?: number;
   match?: "all" | "any";
   conditions: AudienceCondition[];
+  /**
+   * When present, the audience matches if every condition of at least one group
+   * matches (OR of ANDs), and `conditions` only lists them all. Campaigns use it:
+   * their UTM values, OR one referring site, OR their advanced rules.
+   */
+  groups?: AudienceCondition[][];
   /** ISO dates; outside this window the audience is ignored. */
   startsAt?: string | null;
   endsAt?: string | null;
@@ -188,8 +194,14 @@ export function audienceMatches(
   input: TouchInput,
   audience: AudienceRule,
 ): boolean {
-  if (!audience.conditions.length) return false;
   const touch = asTouch(input);
+  if (audience.groups?.length)
+    return audience.groups.some(
+      (group) =>
+        group.length > 0 &&
+        group.every((condition) => conditionMatches(touch, condition)),
+    );
+  if (!audience.conditions.length) return false;
   const results = audience.conditions.map((condition) =>
     conditionMatches(touch, condition),
   );
@@ -265,29 +277,58 @@ export function findAudience(
   return audience ? { key: audience.key, id: audience.id } : null;
 }
 
-/** Map a stored audience document (admin shape) to manifest input. */
+const storedCondition = (c: Record<string, unknown>) => ({
+  parameter:
+    c?.parameter === "custom"
+      ? c.customParameter
+      : c?.parameter === "referrer"
+        ? REFERRER_PARAMETER
+        : c?.parameter,
+  operator: c?.operator,
+  value: c?.value,
+});
+
+/**
+ * Map a stored campaign (UTM link with personalization) or a legacy audience
+ * document to manifest input. A campaign matches on its own UTM values
+ * (source, plus medium and campaign when set), OR on one of its referring
+ * sites, OR on its advanced rules.
+ */
 export function audienceDocToRule(doc: Record<string, unknown>): unknown {
-  return {
+  const advanced = Array.isArray(doc.conditions)
+    ? (doc.conditions as Record<string, unknown>[]).map(storedCondition)
+    : [];
+  const base = {
     id: doc.id,
     key: doc.key,
     priority: doc.priority,
-    match: doc.match,
     startsAt: doc.startsAt,
     endsAt: doc.endsAt,
     paths: doc.paths,
-    conditions: Array.isArray(doc.conditions)
-      ? doc.conditions.map((c: Record<string, unknown>) => ({
-          parameter:
-            c?.parameter === "custom"
-              ? c.customParameter
-              : c?.parameter === "referrer"
-                ? REFERRER_PARAMETER
-                : c?.parameter,
-          operator: c?.operator,
-          value: c?.value,
-        }))
-      : [],
   };
+  if (typeof doc.source !== "string" || !doc.source.trim())
+    return { ...base, match: doc.match, conditions: advanced };
+  const utm = (["source", "medium", "campaign"] as const)
+    .filter((name) => typeof doc[name] === "string" && String(doc[name]).trim())
+    .map((name) => ({
+      parameter: `utm_${name}`,
+      operator: "equals",
+      value: String(doc[name]),
+    }));
+  const referrers = (
+    Array.isArray(doc.referrerDomains) ? doc.referrerDomains : []
+  )
+    .filter((domain): domain is string => typeof domain === "string")
+    .map((domain) => [
+      { parameter: REFERRER_PARAMETER, operator: "equals", value: domain },
+    ]);
+  const advancedGroups = advanced.length
+    ? doc.match === "any"
+      ? advanced.map((condition) => [condition])
+      : [advanced]
+    : [];
+  const groups = [utm, ...referrers, ...advancedGroups];
+  return { ...base, match: "any", conditions: groups.flat(), groups };
 }
 
 /** `/menu/` → `/menu`; query and hash removed; root stays `/`. */
@@ -339,6 +380,31 @@ export function parseAudienceManifest(input: unknown): AudienceManifest {
         })
       : [];
     if (!conditions.length) continue;
+    const groups = Array.isArray(entry.groups)
+      ? entry.groups
+          .filter(Array.isArray)
+          .map((group: unknown[]) =>
+            group.flatMap((value): AudienceCondition[] => {
+              if (!value || typeof value !== "object") return [];
+              const c = value as Record<string, unknown>;
+              if (
+                typeof c.parameter !== "string" ||
+                !c.parameter.trim() ||
+                !(audienceOperators as readonly unknown[]).includes(c.operator)
+              )
+                return [];
+              return [
+                {
+                  parameter: c.parameter.trim(),
+                  operator: c.operator as AudienceOperator,
+                  value: typeof c.value === "string" ? c.value : null,
+                },
+              ];
+            }),
+          )
+          .filter((group: AudienceCondition[]) => group.length > 0)
+          .slice(0, 50)
+      : undefined;
     seen.add(entry.key);
     audiences.push({
       key: entry.key,
@@ -349,6 +415,7 @@ export function parseAudienceManifest(input: unknown): AudienceManifest {
       priority: typeof entry.priority === "number" ? entry.priority : 0,
       match: entry.match === "any" ? "any" : "all",
       conditions,
+      ...(groups?.length ? { groups } : {}),
       ...(validDate(entry.startsAt) ? { startsAt: entry.startsAt } : {}),
       ...(validDate(entry.endsAt) ? { endsAt: entry.endsAt } : {}),
       ...(Array.isArray(entry.paths)

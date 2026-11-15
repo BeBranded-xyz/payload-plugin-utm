@@ -40,7 +40,7 @@ const messages = {
     copy: "Copy link",
     copied: "Link copied",
     open: "Open",
-    placeholder: "Enter a destination, source, medium and campaign.",
+    placeholder: "Add a destination URL to get a link to share.",
     save: "Save to keep this link in your campaign inventory.",
     presets: "Quick fill",
     export: "Export saved links (CSV)",
@@ -50,7 +50,7 @@ const messages = {
     copied: "Lien copié",
     open: "Ouvrir",
     placeholder:
-      "Renseignez la destination, la source, le support et la campagne.",
+      "Ajoutez une URL de destination pour obtenir un lien à partager.",
     save: "Enregistrez pour conserver ce lien dans le tableau.",
     presets: "Préremplir",
     export: "Exporter les liens enregistrés (CSV)",
@@ -337,7 +337,7 @@ type MatchNoticeProps = {
 };
 export function AudienceMatchNotice({
   locale = "en",
-  audiencesSlug = "utm-audiences",
+  audiencesSlug = "utm-links",
   policy = {},
 }: MatchNoticeProps) {
   const text = audienceMessages[locale];
@@ -540,7 +540,8 @@ function useAudiences(
   audiencesSlug: string,
 ): LoadedAudience[] | null | "error" {
   const { config } = useConfig();
-  const url = `${config.serverURL ?? ""}${config.routes.api}/${audiencesSlug}?depth=0&limit=1000&pagination=false&sort=priority`;
+  // Campaigns that personalize the site are the audiences.
+  const url = `${config.serverURL ?? ""}${config.routes.api}/${audiencesSlug}?depth=0&limit=1000&pagination=false&sort=priority&where[personalize][equals]=true`;
   const [audiences, setAudiences] = useState<LoadedAudience[] | null | "error">(
     null,
   );
@@ -819,7 +820,7 @@ type PanelProps = {
 /** Sidebar panel on documents that contain personalized blocks. */
 export function PersonalizationPanel({
   locale = "en",
-  audiencesSlug = "utm-audiences",
+  audiencesSlug = "utm-links",
   previewParam = "utm_preview",
   siteUrl,
   draftRoute,
@@ -912,24 +913,26 @@ export function PersonalizationPanel({
           </label>
         </>
       )}
-      {Array.isArray(audiences) && summary.warnings.map((warning, index) => {
-        const target = blocks.findIndex((item) => item.path === warning.path);
-        const name =
-          target >= 0 ? labelOf(blocks[target]!, target) : warning.path;
-        const audienceName =
-          list.find((item) => String(item.id) === warning.audienceId)?.title ??
-          warning.audienceId ??
-          "";
-        return (
-          <p
-            key={index}
-            role="alert"
-            style={{ ...muted, color: "var(--theme-warning-750)" }}
-          >
-            ⚠ {text.warn[warning.kind](name, audienceName)}
-          </p>
-        );
-      })}
+      {Array.isArray(audiences) &&
+        summary.warnings.map((warning, index) => {
+          const target = blocks.findIndex((item) => item.path === warning.path);
+          const name =
+            target >= 0 ? labelOf(blocks[target]!, target) : warning.path;
+          const audienceName =
+            list.find((item) => String(item.id) === warning.audienceId)
+              ?.title ??
+            warning.audienceId ??
+            "";
+          return (
+            <p
+              key={index}
+              role="alert"
+              style={{ ...muted, color: "var(--theme-warning-750)" }}
+            >
+              ⚠ {text.warn[warning.kind](name, audienceName)}
+            </p>
+          );
+        })}
       {blocks.length > 0 && (
         <details>
           <summary style={{ cursor: "pointer" }}>{text.personalize}</summary>
@@ -1010,7 +1013,7 @@ type BlockActionProps = {
 export function BlockVariantAction({
   path,
   locale = "en",
-  audiencesSlug = "utm-audiences",
+  audiencesSlug = "utm-links",
   fieldName = "personalization",
 }: BlockActionProps) {
   const text = editorMessages[locale];
@@ -1079,7 +1082,7 @@ type BlockLabelProps = {
 /** Block header: number, block type, editable name and an audience badge. */
 export function PersonalizedBlockLabel({
   locale = "en",
-  audiencesSlug = "utm-audiences",
+  audiencesSlug = "utm-links",
   blockLabel,
   showBlockName = true,
   fieldName = "personalization",
@@ -1270,5 +1273,235 @@ export function PersonalizationSimulator({
         </div>
       )}
     </section>
+  );
+}
+
+const campaignStatsMessages = {
+  en: {
+    title: "Last 30 days",
+    arrivals: "Arrivals with these UTM values",
+    entries: "Arrivals recognized as this campaign",
+    views: "Page views by its visitors",
+    variant: "Personalized views",
+    unsaved: "Save the campaign to see its statistics.",
+    error: "Statistics unavailable.",
+    hint: "Counted by the personalization tracker on your pages (no cookie, no identifier).",
+  },
+  fr: {
+    title: "30 derniers jours",
+    arrivals: "Arrivées avec ces UTM",
+    entries: "Arrivées reconnues comme cette campagne",
+    views: "Pages vues par ses visiteurs",
+    variant: "Vues personnalisées",
+    unsaved: "Enregistrez la campagne pour voir ses statistiques.",
+    error: "Statistiques indisponibles.",
+    hint: "Comptées par le traceur de personnalisation de vos pages (sans cookie ni identifiant).",
+  },
+};
+
+/** "Statistics" tab of a campaign: counts from the anonymous views collection. */
+export function CampaignStats({
+  locale = "en",
+  statsSlug = "utm-personalization-views",
+}: {
+  locale?: "en" | "fr";
+  statsSlug?: string;
+}) {
+  const text = campaignStatsMessages[locale];
+  const { config } = useConfig();
+  const { id } = useDocumentInfo();
+  const form = useFormFields(([fields]) => {
+    const value = (name: string) =>
+      typeof fields[name]?.value === "string"
+        ? (fields[name]!.value as string).trim().toLowerCase()
+        : "";
+    return JSON.stringify({
+      source: value("source"),
+      medium: value("medium"),
+      campaign: value("campaign"),
+      key: value("key"),
+      personalize: fields.personalize?.value === true,
+    });
+  });
+  const [counts, setCounts] = useState<Record<string, number> | "error" | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!id) return;
+    const f = JSON.parse(form) as {
+      source: string;
+      medium: string;
+      campaign: string;
+      key: string;
+      personalize: boolean;
+    };
+    const since = new Date(Date.now() - 29 * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    const count = async (conditions: [string, string, string][]) => {
+      const params = new URLSearchParams({ limit: "1", depth: "0" });
+      [
+        ["day", "greater_than_equal", since] as [string, string, string],
+        ...conditions,
+      ].forEach(([field, op, value], index) =>
+        params.set(`where[and][${index}][${field}][${op}]`, value),
+      );
+      const response = await fetch(
+        `${config.serverURL ?? ""}${config.routes.api}/${statsSlug}?${params}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      return ((await response.json()) as { totalDocs?: number }).totalDocs ?? 0;
+    };
+    let alive = true;
+    const utm: [string, string, string][] = [
+      ["entry", "equals", "true"],
+      ["utm", "equals", "true"],
+      ["source", "equals", f.source],
+      ...(f.medium
+        ? [["medium", "equals", f.medium] as [string, string, string]]
+        : []),
+      ...(f.campaign
+        ? [["campaign", "equals", f.campaign] as [string, string, string]]
+        : []),
+    ];
+    Promise.all([
+      f.source ? count(utm) : Promise.resolve(0),
+      ...(f.personalize && f.key
+        ? [
+            count([
+              ["audience", "equals", f.key],
+              ["entry", "equals", "true"],
+            ]),
+            count([["audience", "equals", f.key]]),
+            count([
+              ["audience", "equals", f.key],
+              ["variant", "equals", "true"],
+            ]),
+          ]
+        : []),
+    ])
+      .then(([arrivals, entries, views, variant]) => {
+        if (!alive) return;
+        setCounts({
+          arrivals: arrivals ?? 0,
+          ...(entries !== undefined
+            ? { entries, views: views ?? 0, variant: variant ?? 0 }
+            : {}),
+        });
+      })
+      .catch(() => alive && setCounts("error"));
+    return () => {
+      alive = false;
+    };
+  }, [id, form, config.serverURL, config.routes.api, statsSlug]);
+  if (!id) return <p style={muted}>{text.unsaved}</p>;
+  if (counts === "error") return <p style={muted}>{text.error}</p>;
+  const rows: [string, number | undefined][] = counts
+    ? [
+        [text.arrivals, counts.arrivals],
+        [text.entries, counts.entries],
+        [text.views, counts.views],
+        [text.variant, counts.variant],
+      ]
+    : [];
+  return (
+    <div className="field-type" style={{ display: "grid", gap: 8 }}>
+      <FieldLabel label={text.title} />
+      {counts === null ? (
+        <p style={muted}>…</p>
+      ) : (
+        <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
+          {rows
+            .filter(([, value]) => value !== undefined)
+            .map(([label, value]) => (
+              <div key={label}>
+                <strong style={{ fontSize: 24 }}>{value}</strong>
+                <div style={muted}>{label}</div>
+              </div>
+            ))}
+        </div>
+      )}
+      <p style={muted}>{text.hint}</p>
+    </div>
+  );
+}
+
+const detectedMessages = {
+  en: {
+    create: "Create the campaign",
+    creating: "Creating…",
+    failed: "Could not create it.",
+  },
+  fr: {
+    create: "Créer la campagne",
+    creating: "Création…",
+    failed: "Création impossible.",
+  },
+};
+
+/** Button of the "detected campaigns" table: creates the campaign pre-filled, then opens it. */
+export function CreateDetectedCampaign({
+  locale = "en",
+  linksSlug = "utm-links",
+  source,
+  medium,
+  campaign,
+  referrer,
+}: {
+  locale?: "en" | "fr";
+  linksSlug?: string;
+  source: string;
+  medium?: string | null;
+  campaign?: string | null;
+  referrer?: string | null;
+}) {
+  const text = detectedMessages[locale];
+  const { config } = useConfig();
+  const [state, setState] = useState<"idle" | "busy" | "error">("idle");
+  const create = async () => {
+    setState("busy");
+    try {
+      const name = referrer
+        ? referrer.replace(/^www\./, "").split(".")[0]!
+        : source;
+      const response = await fetch(
+        `${config.serverURL ?? ""}${config.routes.api}/${linksSlug}?depth=0`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: referrer
+              ? referrer
+              : [source, medium, campaign].filter(Boolean).join(" · "),
+            source: referrer ? name : source,
+            ...(referrer
+              ? { medium: "referral" }
+              : {
+                  ...(medium ? { medium } : {}),
+                  ...(campaign ? { campaign } : {}),
+                }),
+            ...(referrer ? { referrerDomains: [referrer] } : {}),
+          }),
+        },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      const { doc } = (await response.json()) as {
+        doc: { id: string | number };
+      };
+      window.location.href = `${config.routes.admin}/collections/${linksSlug}/${doc.id}`;
+    } catch {
+      setState("error");
+    }
+  };
+  return (
+    <button type="button" onClick={create} disabled={state === "busy"}>
+      {state === "busy"
+        ? text.creating
+        : state === "error"
+          ? text.failed
+          : text.create}
+    </button>
   );
 }

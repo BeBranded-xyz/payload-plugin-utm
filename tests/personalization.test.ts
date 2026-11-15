@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { allFields, endpointOf } from "./helpers.js";
 import { beforeEach, test } from "node:test";
 import type {
   Block,
@@ -263,7 +264,7 @@ test("adds audiences collection and injects visibility into targeted blocks ever
   assert(!hasPersonalization(hero), "input blocks are not mutated");
   assert.deepEqual(
     result.collections!.map((c) => c.slug),
-    ["pages", "utm-links", "utm-audiences"],
+    ["pages", "utm-links", "utm-personalization-views"],
   );
   const resultPages = result.collections![0]!;
   const tabs = resultPages.fields[0] as { tabs: { fields: Field[] }[] };
@@ -291,14 +292,14 @@ test("personalization is opt-in and validates options", async () => {
     utmPlugin({ personalization } as never)({
       collections: [],
     } as unknown as Config);
-  assert.throws(() => run({ audiencesSlug: "Bad Slug" }), /audiencesSlug/);
+  assert.throws(() => run({ audiencesSlug: "x" }), /audiencesSlug was removed/);
   assert.throws(() => run({ blocks: "hero" }), /blocks/);
   assert.throws(() => run({ manifest: { secret: "short" } }), /secret/);
   assert.throws(() => run({ manifest: { limit: 0 } }), /limit/);
   assert.throws(
     () =>
       utmPlugin({ personalization: {} })({
-        collections: [{ slug: "utm-audiences", fields: [] }],
+        collections: [{ slug: "utm-personalization-views", fields: [] }],
       } as unknown as Config),
     /already exists/,
   );
@@ -310,18 +311,19 @@ const audiencesConfig = async (manifestOptions = {}) => {
   })({
     collections: [],
   } as unknown as Config);
-  return result.collections!.find((c) => c.slug === "utm-audiences")!;
+  return result.collections!.find((c) => c.slug === "utm-links")!;
 };
 
 test("audience key validation rejects reserved and unsafe keys", async () => {
   const collection = await audiencesConfig();
-  const key = collection.fields.find(
+  const key = allFields(collection).find(
     (f) => "name" in f && f.name === "key",
   ) as {
     validate: (v: unknown) => true | string;
   };
   assert.equal(key.validate("restaurant-a"), true);
-  for (const bad of ["default", "Restaurant", "../x", "", "a".repeat(65)])
+  assert.equal(key.validate(""), true, "generated when empty");
+  for (const bad of ["default", "auto", "Restaurant", "../x", "a".repeat(65)])
     assert.notEqual(key.validate(bad), true);
 });
 
@@ -330,7 +332,7 @@ test("manifest endpoint publishes a fixed projection of active audiences", async
     secret: "s".repeat(20),
     tenantField: "tenant",
   });
-  const handler = (collection.endpoints || [])[0]!.handler;
+  const handler = endpointOf(collection, "/manifest").handler;
   let args: Record<string, unknown> | undefined;
   const req = (auth: string, query: Record<string, unknown> = {}) =>
     ({
@@ -365,7 +367,11 @@ test("manifest endpoint publishes a fixed projection of active audiences", async
   const ok = await handler(req(`Bearer ${"s".repeat(20)}`, { tenant: "12" }));
   assert.equal(ok.status, 200);
   assert.deepEqual(args!.where, {
-    and: [{ state: { equals: "active" } }, { tenant: { equals: "12" } }],
+    and: [
+      { state: { equals: "active" } },
+      { tenant: { equals: "12" } },
+      { personalize: { equals: true } },
+    ],
   });
   assert.equal(ok.headers.get("cache-control"), "private, max-age=30");
   const body = await ok.json();
@@ -671,34 +677,30 @@ test("example campaign query and stored doc mapping", () => {
   assert.equal(resolveAudience(q("ref=VIP"), parsed)?.id, 4);
 });
 
-test("UTM links get an audience relationship and match notice when personalization is on", async () => {
-  const result = await utmPlugin({
-    locale: "fr",
-    personalization: { audiencesSlug: "audiences" },
-  })({
+test("campaigns carry the personalization tab; without personalization they stay plain links", async () => {
+  const result = await utmPlugin({ locale: "fr", personalization: {} })({
     collections: [],
   } as unknown as Config);
   const links = result.collections!.find((c) => c.slug === "utm-links")!;
-  const audience = links.fields.find(
-    (f) => "name" in f && f.name === "audience",
-  ) as {
-    relationTo: string;
+  const tabs = links.fields.find((f) => f.type === "tabs") as unknown as {
+    tabs: { label: { fr: string }; fields: Field[] }[];
   };
-  assert.equal(audience.relationTo, "audiences");
-  const notice = links.fields.find(
-    (f) => "name" in f && f.name === "audienceCheck",
-  ) as {
-    admin: { components: { Field: { clientProps: Record<string, unknown> } } };
-  };
-  assert.equal(
-    notice.admin.components.Field.clientProps.audiencesSlug,
-    "audiences",
+  assert.deepEqual(
+    tabs.tabs.map((tab) => tab.label.fr),
+    ["Lien", "Personnaliser le site", "Statistiques"],
   );
-  assert.equal(notice.admin.components.Field.clientProps.locale, "fr");
+  const names = allFields(links).map((f) => ("name" in f ? f.name : ""));
+  for (const name of ["personalize", "referrerDomains", "pages", "audienceContent", "key", "conditions"])
+    assert(names.includes(name), name);
+  assert.equal(names.includes("audience"), false, "no separate audience relationship");
+  const source = allFields(links).find((f) => "name" in f && f.name === "source") as { required?: boolean };
+  const medium = allFields(links).find((f) => "name" in f && f.name === "medium") as { required?: boolean };
+  assert.equal(source.required, true);
+  assert.equal(medium.required, false, "only the source is required");
   const base = await utmPlugin()({ collections: [] } as unknown as Config);
   assert(
-    !base.collections![0]!.fields.some(
-      (f) => "name" in f && f.name === "audience",
+    !allFields(base.collections![0]!).some(
+      (f) => "name" in f && f.name === "personalize",
     ),
   );
 });
@@ -721,9 +723,9 @@ test("preview options are validated and can be disabled", async () => {
     preview: { siteUrl: "https://site.test", param: "see" },
   });
   const audiences = enabled.collections!.find(
-    (c) => c.slug === "utm-audiences",
+    (c) => c.slug === "utm-links",
   )!;
-  const preview = audiences.fields.find(
+  const preview = allFields(audiences).find(
     (f) => "name" in f && f.name === "preview",
   ) as {
     admin: { components: { Field: { clientProps: Record<string, unknown> } } };
@@ -737,7 +739,7 @@ test("preview options are validated and can be disabled", async () => {
   const disabled = await run({ preview: false });
   assert(
     !disabled
-      .collections!.find((c) => c.slug === "utm-audiences")!
+      .collections!.find((c) => c.slug === "utm-links")!
       .fields.some((f) => "name" in f && f.name === "preview"),
   );
 });
@@ -755,12 +757,23 @@ test("afterAudienceChange runs on change and delete, and its errors never fail t
     },
   })({ collections: [] } as unknown as Config);
   const audiences = result.collections!.find(
-    (c) => c.slug === "utm-audiences",
+    (c) => c.slug === "utm-links",
   )!;
   const req = {
     payload: { logger: { error: (entry: unknown) => logged.push(entry) } },
   };
-  const doc = { id: 1, key: "vip" };
+  const doc = { id: 1, key: "vip", personalize: true };
+  const plain = { id: 2, key: null, personalize: false };
+  assert.equal(
+    await audiences.hooks!.afterChange![0]!({
+      doc: plain,
+      previousDoc: {},
+      operation: "update",
+      req,
+    } as never),
+    plain,
+    "plain links do not notify",
+  );
   assert.equal(
     await audiences.hooks!.afterChange![0]!({
       doc,
@@ -890,9 +903,9 @@ test("manifest lists the pages that change per audience, and falls back safely",
     },
   });
   const audiences = result.collections!.find(
-    (c) => c.slug === "utm-audiences",
+    (c) => c.slug === "utm-links",
   )!;
-  const handler = (audiences.endpoints || [])[0]!.handler;
+  const handler = endpointOf(audiences, "/manifest").handler;
   const pages = [
     {
       id: "p1",
@@ -993,16 +1006,16 @@ test("referrer condition values must be domains; content fields are added", asyn
     },
   })({ collections: [] } as unknown as Config);
   const audiences = result.collections!.find(
-    (c) => c.slug === "utm-audiences",
+    (c) => c.slug === "utm-links",
   )!;
-  const content = audiences.fields.find(
-    (f) => "name" in f && f.name === "content",
+  const content = allFields(audiences).find(
+    (f) => "name" in f && f.name === "audienceContent",
   ) as { fields: { name: string }[] };
   assert.deepEqual(
     content.fields.map((f) => f.name),
     ["displayName", "tagline", "linkLabel", "linkUrl", "image", "sector"],
   );
-  const conditions = audiences.fields.find(
+  const conditions = allFields(audiences).find(
     (f) => "name" in f && f.name === "conditions",
   ) as {
     fields: {

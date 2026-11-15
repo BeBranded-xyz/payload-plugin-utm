@@ -3,8 +3,17 @@
  */
 import { DefaultTemplate } from "@payloadcms/next/templates";
 import { Gutter, SetStepNav } from "@payloadcms/ui";
-import type { AdminViewServerProps, CollectionSlug, GlobalSlug } from "payload";
-import { PersonalizationSimulator } from "./client/index.js";
+import type {
+  AdminViewServerProps,
+  CollectionSlug,
+  GlobalSlug,
+  Payload,
+  TypedUser,
+} from "payload";
+import {
+  CreateDetectedCampaign,
+  PersonalizationSimulator,
+} from "./client/index.js";
 import type { PersonalizationTarget } from "./personalization/collection.js";
 import {
   audienceDocToRule,
@@ -23,6 +32,7 @@ import {
   dayOf,
   summarizeViews,
   unregisteredCampaigns,
+  unregisteredReferrers,
   type StatsSummary,
   type UnregisteredCampaign,
   type ViewRecord,
@@ -46,14 +56,14 @@ const t = {
     title: "Personalization",
     intro:
       "Campaign audiences, the pages they change and the UTM links that trigger them, filtered by your permissions.",
-    audiences: "Audiences",
-    audience: "Audience",
+    audiences: "Personalized campaigns",
+    audience: "Campaign",
     status: "Status",
     documents: "Personalized content",
     links: "UTM links",
     priority: "Priority",
-    none: "No audience yet.",
-    create: "Create an audience",
+    none: "No campaign personalizes the site yet.",
+    create: "Create a campaign",
     active: "Active",
     archived: "Archived",
     scheduled: "Scheduled",
@@ -83,14 +93,14 @@ const t = {
     title: "Personnalisation",
     intro:
       "Les audiences de campagne, les contenus qu’elles modifient et les liens UTM qui les déclenchent, selon vos droits.",
-    audiences: "Audiences",
-    audience: "Audience",
+    audiences: "Campagnes personnalisées",
+    audience: "Campagne",
     status: "Statut",
     documents: "Contenus personnalisés",
     links: "Liens UTM",
     priority: "Priorité",
-    none: "Aucune audience pour l’instant.",
-    create: "Créer une audience",
+    none: "Aucune campagne ne personnalise encore le site.",
+    create: "Créer une campagne",
     active: "Active",
     archived: "Archivée",
     scheduled: "Programmée",
@@ -235,6 +245,7 @@ export async function PersonalizationView(
         limit: 1000,
         pagination: false,
         sort: "priority",
+        where: { personalize: { equals: true } },
       })
     : { docs: [] };
   const audienceDocs = audienceResult.docs as Record<string, unknown>[];
@@ -252,33 +263,13 @@ export async function PersonalizationView(
       .map(audienceDocToRule),
   });
 
-  let links: {
+  // A campaign is its own UTM link: no separate link inventory to cross-check.
+  const links: {
     id: string;
     title: string;
     generatedUrl?: string;
     audience?: unknown;
   }[] = [];
-  try {
-    const result = await payload.find({
-      collection: options.linksSlug as CollectionSlug,
-      req,
-      overrideAccess: false,
-      depth: 0,
-      limit: 1000,
-      pagination: false,
-      where: { audience: { exists: true } },
-      select: { title: true, generatedUrl: true, audience: true },
-    });
-    links = (result.docs as Record<string, unknown>[]).map((doc) => ({
-      id: String(doc.id),
-      title: String(doc.title ?? doc.id),
-      generatedUrl:
-        typeof doc.generatedUrl === "string" ? doc.generatedUrl : undefined,
-      audience: doc.audience,
-    }));
-  } catch {
-    notes.push(text.unreadable(options.linksSlug));
-  }
 
   const documents: DocRow[] = [];
   for (const target of options.targets) {
@@ -499,7 +490,6 @@ export async function PersonalizationView(
                   <th style={cell}>{text.audience}</th>
                   <th style={cell}>{text.status}</th>
                   <th style={cell}>{text.documents}</th>
-                  <th style={cell}>{text.links}</th>
                   <th style={cell}>{text.priority}</th>
                 </tr>
               </thead>
@@ -514,9 +504,6 @@ export async function PersonalizationView(
                       ).length,
                     }))
                     .filter((entry) => entry.count > 0);
-                  const linkCount = links.filter(
-                    (link) => audienceRefIds([link.audience])[0] === id,
-                  ).length;
                   return (
                     <tr key={id}>
                       <td style={cell}>
@@ -544,17 +531,6 @@ export async function PersonalizationView(
                                 {text.blocks(count)}
                               </div>
                             ))}
-                      </td>
-                      <td style={cell}>
-                        {linkCount === 0 ? (
-                          "0"
-                        ) : (
-                          <a
-                            href={`${admin}/collections/${options.linksSlug}?where[audience][equals]=${encodeURIComponent(id)}`}
-                          >
-                            {linkCount}
-                          </a>
-                        )}
                       </td>
                       <td style={cell}>
                         {String(
@@ -597,11 +573,15 @@ export async function PersonalizationView(
               <>
                 <p style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
                   <span>
-                    <strong style={{ fontSize: 24 }}>{stats.total.entries}</strong>{" "}
+                    <strong style={{ fontSize: 24 }}>
+                      {stats.total.entries}
+                    </strong>{" "}
                     {st.entries}
                   </span>
                   <span>
-                    <strong style={{ fontSize: 24 }}>{stats.total.views}</strong>{" "}
+                    <strong style={{ fontSize: 24 }}>
+                      {stats.total.views}
+                    </strong>{" "}
                     {st.views}
                   </span>
                   <span>
@@ -721,9 +701,7 @@ export async function PersonalizationView(
                   </thead>
                   <tbody>
                     {unregistered.map((row) => (
-                      <tr
-                        key={`${row.source}|${row.medium}|${row.campaign}`}
-                      >
+                      <tr key={`${row.source}|${row.medium}|${row.campaign}`}>
                         <td style={cell}>⚠ {row.source}</td>
                         <td style={cell}>{row.medium ?? "—"}</td>
                         <td style={cell}>{row.campaign ?? "—"}</td>
@@ -781,5 +759,200 @@ export async function PersonalizationView(
         />
       </Gutter>
     </DefaultTemplate>
+  );
+}
+
+const detectedText = {
+  en: {
+    title: "Detected campaigns, not created yet",
+    intro: (days: number) =>
+      `Last ${days} days: UTM values and referring sites that bring visitors but match no campaign here. Create one to name it, measure it and personalize the site for its visitors.`,
+    utm: "UTM values",
+    sites: "Referring sites without UTM",
+    arrivals: "Arrivals",
+    seen: "Seen",
+    none: "Nothing new: every campaign and referring site seen is already here.",
+    off: "Detection needs the personalization tracker on your pages (<PersonalizationTracker stats />).",
+  },
+  fr: {
+    title: "Campagnes détectées, pas encore créées",
+    intro: (days: number) =>
+      `${days} derniers jours : des UTM et des sites qui vous envoient des visiteurs mais ne correspondent à aucune campagne ici. Créez-la pour la nommer, la mesurer et personnaliser le site pour ses visiteurs.`,
+    utm: "UTM",
+    sites: "Sites qui renvoient vers vous sans UTM",
+    arrivals: "Arrivées",
+    seen: "Vu",
+    none: "Rien de nouveau : toutes les campagnes et tous les sites vus sont déjà là.",
+    off: "La détection a besoin du traceur de personnalisation sur vos pages (<PersonalizationTracker stats />).",
+  },
+};
+
+type DetectedOptions = {
+  locale: "en" | "fr";
+  linksSlug: string;
+  statsSlug: string;
+  statsLimit?: number;
+};
+
+/** Above the campaigns list: UTM values and referring sites seen but not created. */
+export async function DetectedCampaigns(props: {
+  payload: Payload;
+  user?: TypedUser;
+  pluginOptions: DetectedOptions;
+}) {
+  const { payload, user, pluginOptions: options } = props;
+  const text = detectedText[options.locale];
+  if (!user) return null;
+  const days = 30;
+  let rows: Partial<ViewRecord>[] = [];
+  let links: Record<string, unknown>[] = [];
+  try {
+    const since = dayOf(new Date(Date.now() - (days - 1) * 86_400_000));
+    const views = await payload.find({
+      collection: options.statsSlug as CollectionSlug,
+      user,
+      overrideAccess: false,
+      depth: 0,
+      limit: options.statsLimit ?? 50_000,
+      sort: "-day",
+      where: {
+        and: [
+          { day: { greater_than_equal: since } },
+          { entry: { equals: true } },
+        ],
+      },
+      select: {
+        day: true,
+        entry: true,
+        utm: true,
+        source: true,
+        medium: true,
+        campaign: true,
+      } as never,
+    });
+    rows = views.docs as Partial<ViewRecord>[];
+    const result = await payload.find({
+      collection: options.linksSlug as CollectionSlug,
+      user,
+      overrideAccess: false,
+      depth: 0,
+      limit: 5000,
+      pagination: false,
+      select: {
+        source: true,
+        medium: true,
+        campaign: true,
+        referrerDomains: true,
+      } as never,
+    });
+    links = result.docs as Record<string, unknown>[];
+  } catch {
+    return null;
+  }
+  const utm = unregisteredCampaigns(rows, links, 20);
+  const sites = unregisteredReferrers(rows, links, 20);
+  const cell = {
+    padding: "6px 10px",
+    borderBottom: "1px solid var(--theme-elevation-100)",
+    textAlign: "left" as const,
+  };
+  const seen = (first: string | null, last: string | null) =>
+    first === last ? (first ?? "") : `${first} → ${last}`;
+  return (
+    <Gutter>
+      <details
+        open={utm.length + sites.length > 0}
+        style={{
+          margin: "16px 0 24px",
+          padding: "12px 16px",
+          border: "1px solid var(--theme-elevation-150)",
+          borderRadius: 4,
+        }}
+      >
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+          {text.title} ({utm.length + sites.length})
+        </summary>
+        <p style={{ color: "var(--theme-elevation-600)" }}>
+          {text.intro(days)}
+        </p>
+        {rows.length === 0 ? (
+          <p style={{ color: "var(--theme-elevation-600)" }}>{text.off}</p>
+        ) : utm.length + sites.length === 0 ? (
+          <p>✓ {text.none}</p>
+        ) : (
+          <>
+            {utm.length > 0 && (
+              <>
+                <h4>{text.utm}</h4>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={cell}>utm_source</th>
+                      <th style={cell}>utm_medium</th>
+                      <th style={cell}>utm_campaign</th>
+                      <th style={cell}>{text.arrivals}</th>
+                      <th style={cell}>{text.seen}</th>
+                      <th style={cell}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {utm.map((row) => (
+                      <tr key={`${row.source}|${row.medium}|${row.campaign}`}>
+                        <td style={cell}>{row.source}</td>
+                        <td style={cell}>{row.medium ?? "—"}</td>
+                        <td style={cell}>{row.campaign ?? "—"}</td>
+                        <td style={cell}>{row.entries}</td>
+                        <td style={cell}>{seen(row.firstDay, row.lastDay)}</td>
+                        <td style={cell}>
+                          <CreateDetectedCampaign
+                            locale={options.locale}
+                            linksSlug={options.linksSlug}
+                            source={row.source}
+                            medium={row.medium}
+                            campaign={row.campaign}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+            {sites.length > 0 && (
+              <>
+                <h4 style={{ marginTop: 16 }}>{text.sites}</h4>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={cell}>Site</th>
+                      <th style={cell}>{text.arrivals}</th>
+                      <th style={cell}>{text.seen}</th>
+                      <th style={cell}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sites.map((row) => (
+                      <tr key={row.domain}>
+                        <td style={cell}>{row.domain}</td>
+                        <td style={cell}>{row.entries}</td>
+                        <td style={cell}>{seen(row.firstDay, row.lastDay)}</td>
+                        <td style={cell}>
+                          <CreateDetectedCampaign
+                            locale={options.locale}
+                            linksSlug={options.linksSlug}
+                            source={row.domain}
+                            referrer={row.domain}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </>
+        )}
+      </details>
+    </Gutter>
   );
 }

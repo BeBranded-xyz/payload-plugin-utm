@@ -10,18 +10,18 @@ export async function seed(payload: Payload) {
     data: { email: "dev@example.com", password: "test" } as never,
   });
   const coudac = await payload.create({
-    collection: "utm-audiences" as never,
+    collection: "utm-links" as never,
     data: {
-      title: "Visiteurs Coudac",
-      key: "coudac",
-      match: "any",
-      priority: 0,
-      state: "active",
-      conditions: [
-        { parameter: "referrer", operator: "equals", value: "coudac.com" },
-        { parameter: "utm_source", operator: "equals", value: "coudac" },
-      ],
-      content: { displayName: "Coudac", tagline: "Agence e-commerce partenaire" },
+      title: "Coudac (crédit du pied de page)",
+      source: "coudac",
+      medium: "referral",
+      personalize: true,
+      referrerDomains: ["coudac.*"],
+      pages: ["/", "/en"],
+      audienceContent: {
+        displayName: "Coudac",
+        tagline: "Agence e-commerce partenaire",
+      },
     } as never,
   });
   const only = { mode: "only", audiences: [coudac.id] };

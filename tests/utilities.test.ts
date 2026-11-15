@@ -79,13 +79,13 @@ test("origin restrictions match exact origin, including protocol and port", () =
     assert.equal(buildUtmUrl({ ...base, destination }, options), null);
   assert.equal(buildUtmUrl(base, { allowedOrigins: [] }), null);
 });
-test("all required fields must be present after normalization", () => {
-  for (const field of ["source", "medium", "campaign"])
-    assert.equal(buildUtmUrl({ ...base, [field]: " " }), null);
-  assert.equal(
-    buildUtmUrl({ ...base, campaign: "你好" }, { normalization: "slug" }),
-    null,
-  );
+test("only the source is required; empty medium or campaign are left out", () => {
+  assert.equal(buildUtmUrl({ ...base, source: " " }), null);
+  assert.equal(buildUtmUrl({ ...base, source: "你好" }, { normalization: "slug" }), null);
+  const noMedium = buildUtmUrl({ ...base, medium: " ", campaign: "" })!;
+  assert.equal(new URL(noMedium).searchParams.get("utm_source"), base.source);
+  assert.equal(new URL(noMedium).searchParams.has("utm_medium"), false);
+  assert.equal(new URL(noMedium).searchParams.has("utm_campaign"), false);
 });
 test("defensive runtime checks reject non-string and oversized input", () => {
   assert.equal(buildUtmUrl({ ...base, source: 42 as unknown as string }), null);

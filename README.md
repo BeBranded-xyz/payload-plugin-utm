@@ -40,13 +40,13 @@ Then run your normal `payload generate:importmap`, `payload generate:types` and 
 
 ## Use it
 
-1. Open **Marketing → UTM links**.
-2. Enter a name and a complete destination URL.
-3. Fill in source, medium and campaign, or use a preset to fill source/medium.
-4. Copy the URL immediately, then save it in your campaign inventory.
-5. Search by campaign/source/medium, filter by status, or export saved links as CSV.
+1. Open **Marketing → UTM campaigns**.
+2. Enter a name and the source (`utm_source`), plus medium and campaign when you want them, or use a preset to fill source/medium.
+3. Add a destination URL to get a link to share, and copy it.
+4. Save it in your campaign inventory.
+5. Search by campaign/source/medium, filter by status, or export saved campaigns as CSV.
 
-The three required parameters are `utm_source`, `utm_medium` and `utm_campaign`. Optional fields support `utm_id`, `utm_content` and `utm_term`. Existing non-UTM query parameters and fragments are preserved. Old UTM parameters, including duplicates and mixed-case keys, are replaced.
+Only `utm_source` is required. `utm_medium` and `utm_campaign` are recommended (GA4 reports "(not set)" without them); optional fields support `utm_id`, `utm_content` and `utm_term`. The destination is optional too: a campaign such as "visitors from our partner's footer" may have no link to share. Existing non-UTM query parameters and fragments are preserved. Old UTM parameters, including duplicates and mixed-case keys, are replaced.
 
 The server always recalculates the saved URL. API clients cannot substitute a forged `generatedUrl`; partial updates preserve existing campaign parameters.
 
@@ -120,7 +120,9 @@ CSV uses UTF-8 with a BOM, CRLF line endings and quoted cells. Values that could
 
 The links you create above can now change what their visitors see. Visitors referred by another site without any UTM (a partner's blog, a directory) can be targeted too. Nothing below is active unless you pass `personalization`.
 
-**Quickest path:** open a saved UTM link → **Personalize the site for this link**. An audience matching its source and campaign is created and attached. Then, on a page, use *Create a variant for…* on a block and edit the copy.
+**One menu, one notion.** A **campaign** (Marketing → UTM campaigns) is a UTM link that can also personalize the site: tick **Personalize the site** in its tab, and its visitors are recognized by its UTM values (source, plus medium and campaign when set), or by the referring sites you list. Then, on a page, use *Create a variant for…* on a block and edit the copy.
+
+**Detected campaigns.** Above the campaign list, **Detected campaigns, not created yet** shows the UTM values and the referring sites (without UTM) that brought visitors in the last 30 days and match no campaign, with their arrivals. **Create the campaign** opens it pre-filled; tick *Personalize the site* and create a variant for the page they land on.
 
 ### 1. Enable it
 
@@ -132,12 +134,16 @@ utmPlugin({
 })
 ```
 
-This adds **Marketing → Campaign audiences** and a **Personalization** group to the listed blocks, wherever they are used (collections, globals, nested blocks, `config.blocks`).
+This adds a **Personalize the site** and a **Statistics** tab to UTM campaigns, a **Personalization** group to the listed blocks wherever they are used (collections, globals, nested blocks, `config.blocks`), and anonymous statistics (`stats: false` to opt out).
 
-- An **audience** has a unique `key`, conditions on `utm_source`, `utm_medium`, `utm_campaign`, `utm_id`, `utm_content`, `utm_term`, any other URL parameter or the **referring site** (`equals`, `is not`, `one of`, `contains`, `starts with`, `is present`), an all/any switch, a priority (lower wins) and optional **campaign dates** (`startsAt` / `endsAt`): outside that window the audience is ignored, including for visitors who already have it in memory. Comparisons ignore case and outer whitespace.
-- **Referring site** conditions take a domain (`partner.com`, subdomains and `www.` included), or `partner.*` for any extension (`partner.fr`, `partner.co.uk`; not `partner.evil.com`). Browsers usually send only the origin, which is enough. Some links send nothing (apps, `rel="noreferrer"`): for an important partner, combine *referring site is partner.com* **or** *utm_source is partner* with "any condition".
-- **Audience content**: a display name, a tagline, a link (text + site path or `https://` URL: `linkLabel`, `linkUrl`) (and an image with `content: { imageCollection: 'media' }`, extra fields with `content.fields`). Write `{{audience.displayName|our clients}}` in any block text and render with `fillAudienceTokens(block, await getAudienceContent(payload, audience))`. Values always come from the CMS, never from the URL, so nobody can make your site display arbitrary text.
-- A **block** is visible to *everyone* (default), *only these audiences* or *everyone except these audiences*. Typical page: the default hero set to "except Restaurant A" and a second hero set to "only Restaurant A".
+A campaign that personalizes the site is an **audience**:
+
+- It is recognized by its **UTM values**: `utm_source`, plus `utm_medium` and `utm_campaign` when they are set on the campaign (a campaign with only a source covers every medium and campaign of it), **or** by one of its **referring sites** (`partner.com`, subdomains and `www.` included, or `partner.*` for any extension: `partner.fr`, `partner.co.uk`, not `partner.evil.com`), **or** by its optional **advanced rules** (any other URL parameter such as `?ref=partner`, `contains`, `starts with`…). Comparisons ignore case and outer whitespace.
+- It has a `key` generated from its source and campaign (unique, editable), **pages it changes**, a priority (lower wins) and optional **campaign dates** (`startsAt` / `endsAt`): outside that window it is ignored, including for visitors who already have it in memory.
+- **Audience content**: a display name, a tagline, a link (text + site path or `https://` URL: `linkLabel`, `linkUrl`) (and an image with `content: { imageCollection: 'media' }`, extra fields with `content.fields`), stored as `audienceContent`. Write `{{audience.displayName|our clients}}` in any block text and render with `fillAudienceTokens(block, await getAudienceContent(payload, audience))`. Values always come from the CMS, never from the URL, so nobody can make your site display arbitrary text.
+- A **block** is visible to *everyone* (default), *only these campaigns* or *everyone except these campaigns*. Typical page: the default hero set to "except Restaurant A" and a second hero set to "only Restaurant A".
+
+Upgrading from 0.2.0-beta.1–3: the separate `utm-audiences` collection is gone; recreate each audience as a campaign (source, referring sites, advanced rules, content). Keep the same `key` so remembered visitors and statistics carry over.
 
 `personalizationField()` is exported if you want the same control on array rows or custom places. Run `generate:importmap`, `generate:types` and your migrations as usual.
 
@@ -156,7 +162,7 @@ export const config = { matcher: ['/((?!api|admin|_next|.*\\..*).*)'] }
 
 Next.js 15: same code in `middleware.ts`, exported as `middleware` instead of `proxy`.
 
-It reads the active audiences from `GET /api/utm-audiences/manifest` (cached 60 s in memory, then served stale while one background refresh runs, so visitors never wait for it; 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). Only audiences that exist in the manifest are ever forwarded.
+It reads the active audiences from `GET /api/utm-links/manifest` (cached 60 s in memory, then served stale while one background refresh runs, so visitors never wait for it; 1.5 s timeout; on failure it serves the last rules or no personalization, never an error page). Only audiences that exist in the manifest are ever forwarded.
 
 **Source memory.** On an *arrival* (tracked campaign parameters, or a referrer from another site) the middleware stores, in one `httpOnly` cookie (`utm_memory`, 90 days):
 
@@ -263,9 +269,8 @@ It invalidates every route under the prefix; variants are regenerated on their n
 
 ### Preview and campaign links
 
-- Each audience has an **Aperçu / Preview** panel: enter a page path and open it as that audience or as the default visitor. It uses `?utm_preview=<key>` (or `default`), which the middleware honours for that request only, without changing the visitor's cookie. Set `personalization.preview: { siteUrl: 'https://www.example.com' }` when the admin is on another origin, `preview.param` if you renamed `previewParam`, or `preview: false` to hide it. Anyone can use the parameter; it only shows content that is already public.
-- The panel also suggests the campaign parameters that trigger the audience and links to the UTM links that target it.
-- With personalization on, **UTM links** get an optional *Personalized audience* field. The sidebar tells editors which audience the link will actually trigger (priorities included) and warns when it does not trigger the selected one or when that audience is archived. When the link triggers no audience, **Personalize the site for this link** creates one from its source, campaign (and content) and attaches it; when it already triggers one, a button attaches it.
+- Each personalized campaign has an **Aperçu / Preview** panel: enter a page path and open it as that audience or as the default visitor. It uses `?utm_preview=<key>` (or `default`), which the middleware honours for that request only, without changing the visitor's cookie. Set `personalization.preview: { siteUrl: 'https://www.example.com' }` when the admin is on another origin, `preview.param` if you renamed `previewParam`, or `preview: false` to hide it. Anyone can use the parameter; it only shows content that is already public.
+- The **Statistics** tab of a campaign shows, over 30 days, arrivals with its UTM values and, when it personalizes the site, the arrivals recognized as it, its visitors' page views and personalized views.
 
 **Previewing drafts.** By default, preview links open the published page. To preview unsaved variants (Next.js draft mode), add one route to your app and point the admin at it:
 
@@ -294,9 +299,9 @@ The route accepts only users signed in to Payload on that domain (otherwise 401)
 
 The view uses `DefaultTemplate` from `@payloadcms/next`, already installed in any app that serves the Payload admin with Next.js.
 
-### Statistics (opt-in)
+### Statistics
 
-`personalization: { stats: true }` adds a **Statistics** section to the Personalization view, for the last 7, 30 or 90 days:
+On with personalization (`stats: false` to opt out): a **Statistics** section in the Personalization view, for the last 7, 30 or 90 days, the **Statistics** tab of each campaign, and the **detected campaigns** above the campaign list:
 
 - per audience: **entries** (first page of a visit), page views and **personalized views** (pages that showed content for that audience);
 - per page: views by audience, split between the personalized and the default version;
@@ -313,7 +318,7 @@ import { PersonalizationTracker } from 'payload-plugin-utm/tracker'
 
 On pages that do not know the audience (static pages without a variant), omit `audience`: the endpoint resolves it from the `utm_memory` cookie sent with the beacon (`stats.cookieName` if you renamed it). `onView={(view) => track('Personalized view', view)}` calls your analytics from a Client Component.
 
-Each view is one row (day, audience, path, version shown; source, medium and campaign on entries) in a hidden `utm-personalization-views` collection: no identifier, no IP, no user agent, no cookie. The endpoint (`POST /api/utm-audiences/stats`) only accepts active audience keys and bounded labels; restrict it with `stats.allowedOrigins`. Rows older than `stats.retentionDays` (180) are deleted; the view aggregates up to `stats.reportLimit` (50 000) rows. Counts are page views, not unique visitors, and miss visitors who block the request.
+Each view is one row (day, audience, path, version shown; source, medium and campaign on entries) in a hidden `utm-personalization-views` collection: no identifier, no IP, no user agent, no cookie. The endpoint (`POST /api/utm-links/stats`) only accepts active audience keys and bounded labels; restrict it with `stats.allowedOrigins`. Rows older than `stats.retentionDays` (180) are deleted; the view aggregates up to `stats.reportLimit` (50 000) rows. Counts are page views, not unique visitors, and miss visitors who block the request.
 
 ### Measurement, privacy, SEO
 

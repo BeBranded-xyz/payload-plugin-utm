@@ -72,7 +72,8 @@ export function buildUtmUrl(
       values[key] = normalizeUtmValue(raw, options.normalization);
     }
   }
-  if (!values.source || !values.medium || !values.campaign) return null;
+  // Only utm_source is required (GA4 reports "(not set)" for a missing medium or campaign).
+  if (!values.source) return null;
   const url = new URL(input.destination!.trim());
   for (const key of [...url.searchParams.keys()])
     if (key.toLowerCase().startsWith("utm_")) url.searchParams.delete(key);
