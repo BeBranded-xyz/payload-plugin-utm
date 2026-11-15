@@ -12,6 +12,7 @@ import { DetectedCampaigns as DetectedCampaigns_e634ba44b5f837c923324c4fa511ee0f
 import { PersonalizationNavLink as PersonalizationNavLink_42a325de63f0ccb136d8b60a08e5da17 } from 'payload-plugin-utm/client'
 import { PersonalizationView as PersonalizationView_e634ba44b5f837c923324c4fa511ee0f } from 'payload-plugin-utm/rsc'
 import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } from '@payloadcms/next/rsc'
+import { DefaultTemplate as DefaultTemplate_4d8077290d2232b07d31cd356512ade6 } from '@payloadcms/next/templates'
 
 /** @type import('payload').ImportMap */
 export const importMap = {
@@ -28,5 +29,6 @@ export const importMap = {
   "payload-plugin-utm/rsc#DetectedCampaigns": DetectedCampaigns_e634ba44b5f837c923324c4fa511ee0f,
   "payload-plugin-utm/client#PersonalizationNavLink": PersonalizationNavLink_42a325de63f0ccb136d8b60a08e5da17,
   "payload-plugin-utm/rsc#PersonalizationView": PersonalizationView_e634ba44b5f837c923324c4fa511ee0f,
-  "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1
+  "@payloadcms/next/rsc#CollectionCards": CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1,
+  "@payloadcms/next/templates#DefaultTemplate": DefaultTemplate_4d8077290d2232b07d31cd356512ade6
 }
