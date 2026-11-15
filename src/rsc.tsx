@@ -31,8 +31,12 @@ import {
   DEFAULT_AUDIENCE,
   dayOf,
   summarizeViews,
+  buildDashboard,
+  installChecks,
   unregisteredCampaigns,
   unregisteredReferrers,
+  type Dashboard,
+  type InstallCheck,
   type StatsSummary,
   type UnregisteredCampaign,
   type ViewRecord,
@@ -159,6 +163,8 @@ const statsText = {
     seen: "Seen",
     createLink: "Create a UTM link",
     days: "Per day",
+    detectedLink:
+      "Detected campaigns, not created yet → in the UTM campaigns list",
   },
   fr: {
     title: "Statistiques",
@@ -188,6 +194,8 @@ const statsText = {
     seen: "Vu",
     createLink: "Créer un lien UTM",
     days: "Par jour",
+    detectedLink:
+      "Campagnes détectées, pas encore créées → dans la liste des campagnes UTM",
   },
 };
 const PERIODS = [7, 30, 90] as const;
@@ -402,10 +410,17 @@ export async function PersonalizationView(
   let stats: StatsSummary | null = null;
   let unregistered: UnregisteredCampaign[] = [];
   let statsCapped = false;
+  let dashboard: Dashboard | null = null;
+  let checks: InstallCheck[] = [];
   if (options.statsSlug && req.user) {
     try {
       const limit = options.statsLimit ?? 50_000;
+      const today = dayOf(now);
       const since = dayOf(new Date(now.getTime() - (period - 1) * 86_400_000));
+      // Current period and the previous one, for the comparison.
+      const previousSince = dayOf(
+        new Date(now.getTime() - (2 * period - 1) * 86_400_000),
+      );
       const result = await payload.find({
         collection: options.statsSlug as CollectionSlug,
         req,
@@ -413,7 +428,7 @@ export async function PersonalizationView(
         depth: 0,
         limit,
         sort: "-day",
-        where: { day: { greater_than_equal: since } },
+        where: { day: { greater_than_equal: previousSince } },
         select: {
           day: true,
           audience: true,
@@ -424,11 +439,30 @@ export async function PersonalizationView(
           source: true,
           medium: true,
           campaign: true,
+          conversion: true,
         } as never,
       });
       statsCapped = result.hasNextPage;
-      const rows = result.docs as Partial<ViewRecord>[];
+      const all = result.docs as Partial<ViewRecord>[];
+      const rows = all.filter((row) => (row.day ?? "") >= since);
+      const previousRows = all.filter((row) => (row.day ?? "") < since);
       stats = summarizeViews(rows);
+      dashboard = buildDashboard(rows, previousRows, {
+        since,
+        until: today,
+        titles: Object.fromEntries(
+          audiences.map((a) => [a.key, a.title ?? a.key]),
+        ),
+      });
+      checks = installChecks({
+        rows,
+        today,
+        manifest,
+        personalized: audienceDocs.map((doc) => ({
+          key: String(doc.key ?? ""),
+          pages: doc.pages,
+        })),
+      });
       const allLinks = await payload.find({
         collection: options.linksSlug as CollectionSlug,
         req,
@@ -473,6 +507,9 @@ export async function PersonalizationView(
       <Gutter>
         <h1 style={{ marginTop: 24 }}>{text.title}</h1>
         <p style={{ color: "var(--theme-elevation-600)" }}>{text.intro}</p>
+        {options.statsSlug && (
+          <InstallChecks checks={checks} locale={options.locale} />
+        )}
 
         <h2 style={{ marginTop: 32 }}>{text.audiences}</h2>
         {audiences.length === 0 ? (
@@ -571,26 +608,14 @@ export async function PersonalizationView(
               <p>{st.empty}</p>
             ) : (
               <>
-                <p style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
-                  <span>
-                    <strong style={{ fontSize: 24 }}>
-                      {stats.total.entries}
-                    </strong>{" "}
-                    {st.entries}
-                  </span>
-                  <span>
-                    <strong style={{ fontSize: 24 }}>
-                      {stats.total.views}
-                    </strong>{" "}
-                    {st.views}
-                  </span>
-                  <span>
-                    <strong style={{ fontSize: 24 }}>
-                      {stats.total.variantViews}
-                    </strong>{" "}
-                    {st.variantViews}
-                  </span>
-                </p>
+                {dashboard && (
+                  <DashboardSection
+                    dashboard={dashboard}
+                    locale={options.locale}
+                    cell={cell}
+                  />
+                )}
+                <h3 style={{ marginTop: 24 }}>{st.audience}</h3>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
@@ -680,50 +705,11 @@ export async function PersonalizationView(
                 </div>
               </>
             )}
-            <h3 style={{ marginTop: 24 }}>{st.unregistered}</h3>
-            <p style={{ color: "var(--theme-elevation-600)" }}>
-              {st.unregisteredHint}
+            <p style={{ marginTop: 24 }}>
+              <a href={`${admin}/collections/${options.linksSlug}`}>
+                {st.detectedLink}
+              </a>
             </p>
-            {unregistered.length === 0 ? (
-              <p>✓ {st.noneUnregistered}</p>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ textAlign: "left" }}>
-                      <th style={cell}>utm_source</th>
-                      <th style={cell}>utm_medium</th>
-                      <th style={cell}>utm_campaign</th>
-                      <th style={cell}>{st.entries}</th>
-                      <th style={cell}>{st.seen}</th>
-                      <th style={cell}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {unregistered.map((row) => (
-                      <tr key={`${row.source}|${row.medium}|${row.campaign}`}>
-                        <td style={cell}>⚠ {row.source}</td>
-                        <td style={cell}>{row.medium ?? "—"}</td>
-                        <td style={cell}>{row.campaign ?? "—"}</td>
-                        <td style={cell}>{row.entries}</td>
-                        <td style={cell}>
-                          {row.firstDay === row.lastDay
-                            ? row.firstDay
-                            : `${row.firstDay} → ${row.lastDay}`}
-                        </td>
-                        <td style={cell}>
-                          <a
-                            href={`${admin}/collections/${options.linksSlug}/create`}
-                          >
-                            {st.createLink}
-                          </a>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
           </>
         )}
 
@@ -825,6 +811,7 @@ export async function DetectedCampaigns(props: {
         day: true,
         entry: true,
         utm: true,
+        path: true,
         source: true,
         medium: true,
         campaign: true,
@@ -910,6 +897,7 @@ export async function DetectedCampaigns(props: {
                             source={row.source}
                             medium={row.medium}
                             campaign={row.campaign}
+                            landingPath={row.landingPath}
                           />
                         </td>
                       </tr>
@@ -942,6 +930,7 @@ export async function DetectedCampaigns(props: {
                             linksSlug={options.linksSlug}
                             source={row.domain}
                             referrer={row.domain}
+                            landingPath={row.landingPath}
                           />
                         </td>
                       </tr>
@@ -954,5 +943,310 @@ export async function DetectedCampaigns(props: {
         )}
       </details>
     </Gutter>
+  );
+}
+
+const dashboardText = {
+  en: {
+    entries: "Arrivals",
+    views: "Page views",
+    variantViews: "Personalized views",
+    conversions: "Conversions",
+    rate: "Conversion rate",
+    vsPrevious: "vs previous period",
+    perDay: "Arrivals per day (bars) and conversions (dots)",
+    campaigns: "Campaigns",
+    campaign: "Campaign or source",
+    landing: "Landing pages",
+    page: "Page",
+    byName: "Conversions by type",
+    fresh: "new",
+  },
+  fr: {
+    entries: "Arrivées",
+    views: "Pages vues",
+    variantViews: "Vues personnalisées",
+    conversions: "Conversions",
+    rate: "Taux de conversion",
+    vsPrevious: "vs période précédente",
+    perDay: "Arrivées par jour (barres) et conversions (points)",
+    campaigns: "Campagnes",
+    campaign: "Campagne ou source",
+    landing: "Pages d’arrivée",
+    page: "Page",
+    byName: "Conversions par type",
+    fresh: "nouveau",
+  },
+};
+
+const percent = (value: number | null) =>
+  value === null ? "—" : `${Math.round(value * 1000) / 10} %`;
+
+function Delta({
+  now,
+  before,
+  fresh,
+}: {
+  now: number;
+  before: number;
+  fresh: string;
+}) {
+  if (!before && !now) return null;
+  const change = before ? (now - before) / before : 1;
+  const color =
+    change > 0
+      ? "var(--theme-success-500, #2e7d32)"
+      : change < 0
+        ? "var(--theme-error-500, #c62828)"
+        : "var(--theme-elevation-500)";
+  return (
+    <span style={{ color, fontSize: 12, marginLeft: 6 }}>
+      {change > 0 ? "▲" : change < 0 ? "▼" : "="}{" "}
+      {before ? `${Math.round(Math.abs(change) * 100)} %` : fresh}
+    </span>
+  );
+}
+
+/** KPIs with their trend, a daily chart and the top campaigns and landing pages. */
+function DashboardSection({
+  dashboard,
+  locale,
+  cell,
+}: {
+  dashboard: Dashboard;
+  locale: "en" | "fr";
+  cell: Record<string, unknown>;
+}) {
+  const text = dashboardText[locale];
+  const { totals, previous } = dashboard;
+  const rate = totals.entries ? totals.conversions / totals.entries : null;
+  const previousRate = previous.entries
+    ? previous.conversions / previous.entries
+    : null;
+  const tiles: [string, string | number, number, number][] = [
+    [text.entries, totals.entries, totals.entries, previous.entries],
+    [text.views, totals.views, totals.views, previous.views],
+    [
+      text.variantViews,
+      totals.variantViews,
+      totals.variantViews,
+      previous.variantViews,
+    ],
+    [
+      text.conversions,
+      totals.conversions,
+      totals.conversions,
+      previous.conversions,
+    ],
+    [text.rate, percent(rate), rate ?? 0, previousRate ?? 0],
+  ];
+  const max = Math.max(1, ...dashboard.days.map((d) => d.entries));
+  const width = 720;
+  const height = 120;
+  const step = width / Math.max(1, dashboard.days.length);
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          gap: 32,
+          flexWrap: "wrap",
+          margin: "8px 0 16px",
+        }}
+      >
+        {tiles.map(([label, value, now, before]) => (
+          <div key={label}>
+            <strong style={{ fontSize: 24 }}>{value}</strong>
+            <Delta now={now} before={before} fresh={text.fresh} />
+            <div style={{ color: "var(--theme-elevation-600)", fontSize: 13 }}>
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p
+        style={{ color: "var(--theme-elevation-600)", fontSize: 12, margin: 0 }}
+      >
+        {text.perDay} · {text.vsPrevious}
+      </p>
+      <svg
+        viewBox={`0 0 ${width} ${height + 16}`}
+        width="100%"
+        style={{ maxWidth: width, display: "block" }}
+        role="img"
+        aria-label={text.perDay}
+      >
+        {dashboard.days.map((day, index) => {
+          const barHeight = (day.entries / max) * height;
+          return (
+            <g key={day.day}>
+              <title>{`${day.day}: ${day.entries} · ${day.conversions}`}</title>
+              <rect
+                x={index * step + 1}
+                y={height - barHeight}
+                width={Math.max(1, step - 2)}
+                height={barHeight}
+                fill="var(--theme-elevation-400)"
+              />
+              {day.conversions > 0 && (
+                <circle
+                  cx={index * step + step / 2}
+                  cy={height - barHeight - 6}
+                  r={3}
+                  fill="var(--theme-success-500, #2e7d32)"
+                />
+              )}
+            </g>
+          );
+        })}
+        <text
+          x={0}
+          y={height + 14}
+          fontSize={10}
+          fill="var(--theme-elevation-500)"
+        >
+          {dashboard.days[0]?.day}
+        </text>
+        <text
+          x={width}
+          y={height + 14}
+          fontSize={10}
+          textAnchor="end"
+          fill="var(--theme-elevation-500)"
+        >
+          {dashboard.days.at(-1)?.day}
+        </text>
+      </svg>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gap: 24,
+          marginTop: 16,
+        }}
+      >
+        <div>
+          <h3>{text.campaigns}</h3>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={cell}>{text.campaign}</th>
+                <th style={cell}>{text.entries}</th>
+                <th style={cell}>{text.conversions}</th>
+                <th style={cell}>{text.rate}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dashboard.campaigns.map((row) => (
+                <tr key={row.id}>
+                  <td style={cell}>{row.label}</td>
+                  <td style={cell}>{row.entries}</td>
+                  <td style={cell}>{row.conversions}</td>
+                  <td style={cell}>{percent(row.rate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3>{text.landing}</h3>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={cell}>{text.page}</th>
+                <th style={cell}>{text.entries}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dashboard.landingPages.map((row) => (
+                <tr key={row.path}>
+                  <td style={cell}>
+                    <code>{row.path}</code>
+                  </td>
+                  <td style={cell}>{row.entries}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {dashboard.conversions.length > 0 && (
+            <>
+              <h3 style={{ marginTop: 16 }}>{text.byName}</h3>
+              <ul>
+                {dashboard.conversions.map((c) => (
+                  <li key={c.name}>
+                    {c.name} : {c.count}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+const checkText = {
+  en: {
+    title: "Setup check",
+    ok: "Tracker, pages and middleware look fine.",
+    "no-views": () =>
+      "No view recorded yet: add <PersonalizationTracker stats /> to your pages (root layout or page template).",
+    "stale-views": (d?: string) =>
+      `No view since ${d}: is the tracker still on your pages, and is the statistics endpoint reachable?`,
+    "single-page": (d?: string) =>
+      `Every view comes from ${d}: the tracker seems to be on one template only. Put it on every page to measure all arrivals and detect campaigns.`,
+    proxy: (d?: string) =>
+      `${d} visitors arrived with the UTM values of a personalized campaign but were not recognized: is the middleware / proxy running on your pages?`,
+    "no-pages": (d?: string) =>
+      `Campaigns without “Pages it changes” (${d}): in static mode every page gets a variant. Fill the pages to keep the others cached.`,
+  },
+  fr: {
+    title: "Contrôle de l’installation",
+    ok: "Traceur, pages et proxy semblent en place.",
+    "no-views": () =>
+      "Aucune vue enregistrée : ajoutez <PersonalizationTracker stats /> à vos pages (layout ou gabarit de page).",
+    "stale-views": (d?: string) =>
+      `Aucune vue depuis le ${d} : le traceur est-il toujours sur vos pages, et l’endpoint des statistiques joignable ?`,
+    "single-page": (d?: string) =>
+      `Toutes les vues viennent de ${d} : le traceur semble n’être que sur un gabarit. Mettez-le sur toutes les pages pour mesurer toutes les arrivées et détecter les campagnes.`,
+    proxy: (d?: string) =>
+      `${d} visiteurs sont arrivés avec les UTM d’une campagne personnalisée sans être reconnus : le middleware / proxy tourne-t-il sur vos pages ?`,
+    "no-pages": (d?: string) =>
+      `Campagnes sans « Pages concernées » (${d}) : en mode statique, toutes les pages ont une variante. Renseignez les pages pour garder les autres en cache.`,
+  },
+};
+
+function InstallChecks({
+  checks,
+  locale,
+}: {
+  checks: InstallCheck[];
+  locale: "en" | "fr";
+}) {
+  const text = checkText[locale];
+  return (
+    <div
+      style={{
+        margin: "16px 0",
+        padding: "12px 16px",
+        borderRadius: 4,
+        border: `1px solid ${checks.some((c) => c.level === "error") ? "var(--theme-error-500, #c62828)" : "var(--theme-elevation-150)"}`,
+      }}
+    >
+      <strong>{text.title}</strong>
+      {checks.length === 0 ? (
+        <p style={{ margin: "6px 0 0" }}>✓ {text.ok}</p>
+      ) : (
+        <ul style={{ margin: "6px 0 0" }}>
+          {checks.map((check) => (
+            <li key={check.id}>
+              {check.level === "error" ? "⛔" : "⚠"}{" "}
+              {text[check.id](check.detail)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

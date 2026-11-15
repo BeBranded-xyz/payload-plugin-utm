@@ -73,7 +73,9 @@ export async function Personalized({
   children,
 }: PersonalizedProps) {
   const active = await currentAudience(audience);
-  return <>{matchesAudienceKeys(active, { only, except }) ? children : fallback}</>;
+  return (
+    <>{matchesAudienceKeys(active, { only, except }) ? children : fallback}</>
+  );
 }
 
 /**
@@ -92,7 +94,12 @@ export async function SourceMemoryFields({
   return (
     <>
       {Object.entries(fields).map(([name, value]) => (
-        <input key={name} type="hidden" name={`${prefix}${name}`} value={value} />
+        <input
+          key={name}
+          type="hidden"
+          name={`${prefix}${name}`}
+          value={value}
+        />
       ))}
     </>
   );

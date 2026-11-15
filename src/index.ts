@@ -10,6 +10,7 @@ import type {
   PersonalizationOptions,
 } from "./personalization/collection.js";
 import { csvEndpoint } from "./csv-endpoint.js";
+import { ga4Endpoint } from "./personalization/ga4.js";
 import {
   addPersonalizationToBlocks,
   campaignPersonalization,
@@ -41,6 +42,7 @@ export {
 export * from "./personalization/match.js";
 export { getAudienceContent } from "./personalization/server.js";
 export { buildAudienceManifest } from "./personalization/collection.js";
+export type { Ga4Options } from "./personalization/ga4.js";
 export * from "./personalization/stats.js";
 export type { PathResolver } from "./personalization/collection.js";
 export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
@@ -406,6 +408,20 @@ function withPersonalization(
     throw new Error(
       "utmPlugin: personalization.content.fields must be an array of fields.",
     );
+  if (options.ga4 !== undefined) {
+    const ga4 = options.ga4;
+    if (!ga4 || !/^\d{4,20}$/.test(String(ga4.propertyId ?? "")))
+      throw new Error(
+        "utmPlugin: personalization.ga4.propertyId must be a numeric GA4 property ID.",
+      );
+    if (
+      !ga4.getAccessToken &&
+      !(ga4.credentials?.client_email && ga4.credentials?.private_key)
+    )
+      throw new Error(
+        "utmPlugin: personalization.ga4 needs credentials (service account client_email + private_key) or getAccessToken().",
+      );
+  }
   const stats = statsSettings(options);
   if (stats) {
     if (!/^[a-z][a-z0-9-]*$/.test(stats.slug) || stats.slug === slug)
@@ -461,6 +477,28 @@ function withPersonalization(
     const main = collection.fields.filter(
       (field) => !isTitle(field) && !isSidebar(field),
     );
+    // List columns: personalization status badges, and arrivals over 30 days (computed, not stored).
+    const listColumns: Field[] = stats
+      ? [
+          {
+            name: "arrivals30d",
+            type: "number",
+            virtual: true,
+            label: { en: "Arrivals (30 days)", fr: "Arrivées (30 j)" },
+            admin: {
+              position: "sidebar",
+              readOnly: true,
+              components: {
+                Field: "payload-plugin-utm/client#HiddenField",
+                Cell: {
+                  path: "payload-plugin-utm/client#CampaignArrivalsCell",
+                  clientProps: { statsSlug: stats.slug },
+                },
+              },
+            },
+          } as Field,
+        ]
+      : [];
     const fields: Field[] = [
       ...head,
       {
@@ -486,6 +524,8 @@ function withPersonalization(
                             clientProps: {
                               locale: context.locale,
                               statsSlug: stats.slug,
+                              linksSlug: slug,
+                              ga4: Boolean(options.ga4),
                             },
                           },
                         },
@@ -498,6 +538,7 @@ function withPersonalization(
         ],
       } as Field,
       ...sidebar,
+      ...listColumns,
     ];
     return {
       ...collection,
@@ -509,6 +550,7 @@ function withPersonalization(
             (column) => column !== "createdAt",
           ),
           "personalize",
+          ...(stats ? ["arrivals30d"] : []),
         ],
         components: {
           ...collection.admin?.components,
@@ -550,6 +592,7 @@ function withPersonalization(
       endpoints: [
         ...(Array.isArray(collection.endpoints) ? collection.endpoints : []),
         ...personalization.endpoints,
+        ...(options.ga4 ? [ga4Endpoint(options.ga4)] : []),
       ],
     } as CollectionConfig;
   });

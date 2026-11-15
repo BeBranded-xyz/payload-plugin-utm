@@ -690,11 +690,26 @@ test("campaigns carry the personalization tab; without personalization they stay
     ["Lien", "Personnaliser le site", "Statistiques"],
   );
   const names = allFields(links).map((f) => ("name" in f ? f.name : ""));
-  for (const name of ["personalize", "referrerDomains", "pages", "audienceContent", "key", "conditions"])
+  for (const name of [
+    "personalize",
+    "referrerDomains",
+    "pages",
+    "audienceContent",
+    "key",
+    "conditions",
+  ])
     assert(names.includes(name), name);
-  assert.equal(names.includes("audience"), false, "no separate audience relationship");
-  const source = allFields(links).find((f) => "name" in f && f.name === "source") as { required?: boolean };
-  const medium = allFields(links).find((f) => "name" in f && f.name === "medium") as { required?: boolean };
+  assert.equal(
+    names.includes("audience"),
+    false,
+    "no separate audience relationship",
+  );
+  const source = allFields(links).find(
+    (f) => "name" in f && f.name === "source",
+  ) as { required?: boolean };
+  const medium = allFields(links).find(
+    (f) => "name" in f && f.name === "medium",
+  ) as { required?: boolean };
   assert.equal(source.required, true);
   assert.equal(medium.required, false, "only the source is required");
   const base = await utmPlugin()({ collections: [] } as unknown as Config);
@@ -722,9 +737,7 @@ test("preview options are validated and can be disabled", async () => {
   const enabled = await run({
     preview: { siteUrl: "https://site.test", param: "see" },
   });
-  const audiences = enabled.collections!.find(
-    (c) => c.slug === "utm-links",
-  )!;
+  const audiences = enabled.collections!.find((c) => c.slug === "utm-links")!;
   const preview = allFields(audiences).find(
     (f) => "name" in f && f.name === "preview",
   ) as {
@@ -756,9 +769,7 @@ test("afterAudienceChange runs on change and delete, and its errors never fail t
       },
     },
   })({ collections: [] } as unknown as Config);
-  const audiences = result.collections!.find(
-    (c) => c.slug === "utm-links",
-  )!;
+  const audiences = result.collections!.find((c) => c.slug === "utm-links")!;
   const req = {
     payload: { logger: { error: (entry: unknown) => logged.push(entry) } },
   };
@@ -902,9 +913,7 @@ test("manifest lists the pages that change per audience, and falls back safely",
         doc.slug === "home" ? "/" : `/${doc.slug}`,
     },
   });
-  const audiences = result.collections!.find(
-    (c) => c.slug === "utm-links",
-  )!;
+  const audiences = result.collections!.find((c) => c.slug === "utm-links")!;
   const handler = endpointOf(audiences, "/manifest").handler;
   const pages = [
     {
@@ -1005,9 +1014,7 @@ test("referrer condition values must be domains; content fields are added", asyn
       },
     },
   })({ collections: [] } as unknown as Config);
-  const audiences = result.collections!.find(
-    (c) => c.slug === "utm-links",
-  )!;
+  const audiences = result.collections!.find((c) => c.slug === "utm-links")!;
   const content = allFields(audiences).find(
     (f) => "name" in f && f.name === "audienceContent",
   ) as { fields: { name: string }[] };

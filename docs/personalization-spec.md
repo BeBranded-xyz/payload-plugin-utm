@@ -118,6 +118,14 @@ Found on the BeBranded site: pages are hand-written React components (no Payload
 - Manifest, stats endpoint and `getAudienceContent` filter `personalize = true`.
 - Detection (`DetectedCampaigns`, `beforeList`): entries of the last 30 days; `unregisteredCampaigns` (a campaign without medium/campaign covers all of them) and `unregisteredReferrers` (search engines and known referring domains left out); creation through the authenticated REST API, then redirect to the new campaign.
 
+## 0.2.0-beta.5: analytics
+
+- Conversions: `{ type: "conversion", name }` beacons stored as rows with `conversion` (indexed), `entry: false`; audience resolved like `auto`, source / medium / campaign from the memory's latest arrival (`conversionSource`). Never counted as page views (`summarizeViews` skips them).
+- Dashboard (`buildDashboard`): current and previous period read in one query; days filled; campaigns grouped by audience, else `source / medium / campaign`; landing pages from entries.
+- Setup check (`installChecks`): no views; last view ≥ 3 days; ≥ 20 views from one path; ≥ 3 entries with a personalized campaign's `utm_source` recorded as default while no entry was recognized; personalized campaigns without pages.
+- List: `arrivals30d` virtual number field with a client Cell (one count request per row), `personalize` Cell with badges.
+- GA4: `ga4.ts`, RS256 JWT with `node:crypto`, `runReport` with exact case-insensitive filters on sessionSource / sessionMedium / sessionCampaignName, metrics sessions + keyEvents, 30 days, memory cache 1 h; `GET /api/<campaigns>/ga4` (authenticated).
+
 ## Out of scope (next)
 
 Geo / language conditions; Edge Config adapter; percentage A/B within an audience.

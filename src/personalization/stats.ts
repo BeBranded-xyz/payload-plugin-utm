@@ -33,6 +33,11 @@ export type ViewEvent = {
   campaign?: string;
   /** Entry only: `source` comes from utm_source (not a referring domain). */
   utm?: boolean;
+  /**
+   * Set on conversions (a lead form sent, a call booked…) instead of page views.
+   * The audience and source are taken from the visitor's source memory.
+   */
+  conversion?: string;
 };
 
 /** Stored row. */
@@ -68,6 +73,17 @@ export function parseViewEvent(
   const path = normalizePath(raw.path.split(/[?#]/)[0]!);
   if (path.length > 300 || path.startsWith("//") || /[\s<>"]/.test(path))
     return null;
+  if (raw.type === "conversion") {
+    const name = cleanLabel(raw.name);
+    if (!name) return null;
+    return {
+      audience: audience === DEFAULT_AUDIENCE ? AUTO_AUDIENCE : audience,
+      path,
+      variant: false,
+      entry: false,
+      conversion: name,
+    };
+  }
   const entry = raw.entry === true;
   const event: ViewEvent = {
     audience,
@@ -168,6 +184,7 @@ export function summarizeViews(
   const sources = new Map<string, SourceStats>();
   const days = new Map<string, StatsSummary["days"][number]>();
   for (const row of rows) {
+    if (row.conversion) continue;
     const audience = row.audience || DEFAULT_AUDIENCE;
     const path = row.path || "/";
     const variant = row.variant === true;
@@ -232,6 +249,8 @@ export type UnregisteredCampaign = {
   medium: string | null;
   campaign: string | null;
   entries: number;
+  /** Most frequent landing page of these visitors. */
+  landingPath: string | null;
   firstDay: string | null;
   lastDay: string | null;
 };
@@ -276,24 +295,42 @@ export function unregisteredCampaigns(
         medium: row.medium || null,
         campaign: row.campaign || null,
         entries: 0,
+        landingPath: null as string | null,
         firstDay: null as string | null,
         lastDay: null as string | null,
       }),
     );
     item.entries++;
+    countLanding(item, row.path);
     if (row.day) {
       if (!item.firstDay || row.day < item.firstDay) item.firstDay = row.day;
       if (!item.lastDay || row.day > item.lastDay) item.lastDay = row.day;
     }
   }
   return [...found.values()]
+    .map(finishLanding)
     .sort((a, b) => b.entries - a.entries)
     .slice(0, limit);
+}
+
+const landingCounts = new WeakMap<object, Map<string, number>>();
+function countLanding(item: object, path: unknown) {
+  if (typeof path !== "string" || !path) return;
+  const counts = landingCounts.get(item) ?? new Map<string, number>();
+  counts.set(path, (counts.get(path) ?? 0) + 1);
+  landingCounts.set(item, counts);
+}
+function finishLanding<T extends { landingPath: string | null }>(item: T): T {
+  const counts = landingCounts.get(item);
+  if (counts)
+    item.landingPath = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+  return item;
 }
 
 export type UnregisteredReferrer = {
   domain: string;
   entries: number;
+  landingPath: string | null;
   firstDay: string | null;
   lastDay: string | null;
 };
@@ -328,16 +365,254 @@ export function unregisteredReferrers(
     const item = bump(found, domain, () => ({
       domain,
       entries: 0,
+      landingPath: null as string | null,
       firstDay: null as string | null,
       lastDay: null as string | null,
     }));
     item.entries++;
+    countLanding(item, row.path);
     if (row.day) {
       if (!item.firstDay || row.day < item.firstDay) item.firstDay = row.day;
       if (!item.lastDay || row.day > item.lastDay) item.lastDay = row.day;
     }
   }
   return [...found.values()]
+    .map(finishLanding)
     .sort((a, b) => b.entries - a.entries)
     .slice(0, limit);
+}
+
+/** Attribution of a conversion: the latest arrival in the source memory (last touch). */
+export function conversionSource(
+  memory: {
+    l?: { p?: Record<string, string>; r?: string };
+  } | null,
+): Pick<ViewEvent, "source" | "medium" | "campaign" | "utm"> {
+  const touch = memory?.l;
+  const utmSource = touch?.p?.utm_source;
+  if (utmSource)
+    return {
+      source: cleanLabel(utmSource) ?? "(direct)",
+      ...(cleanLabel(touch?.p?.utm_medium)
+        ? { medium: cleanLabel(touch?.p?.utm_medium) }
+        : {}),
+      ...(cleanLabel(touch?.p?.utm_campaign)
+        ? { campaign: cleanLabel(touch?.p?.utm_campaign) }
+        : {}),
+      utm: true,
+    };
+  if (touch?.r) return { source: cleanLabel(touch.r) ?? "(direct)" };
+  return { source: "(direct)" };
+}
+
+export type CampaignRow = {
+  /** Audience key, or `source / medium / campaign` for campaigns that do not personalize. */
+  id: string;
+  label: string;
+  entries: number;
+  conversions: number;
+  rate: number | null;
+};
+export type Dashboard = {
+  days: { day: string; entries: number; views: number; conversions: number }[];
+  totals: {
+    entries: number;
+    views: number;
+    variantViews: number;
+    conversions: number;
+  };
+  previous: {
+    entries: number;
+    views: number;
+    variantViews: number;
+    conversions: number;
+  };
+  campaigns: CampaignRow[];
+  landingPages: { path: string; entries: number; conversions: number }[];
+  conversions: { name: string; count: number }[];
+};
+
+const isConversion = (row: Partial<ViewRecord>) => Boolean(row.conversion);
+
+/**
+ * Dashboard figures for a period (`rows`) compared with the previous one
+ * (`previousRows`). Campaigns are grouped by audience when the visitor was
+ * recognized, else by UTM source / medium / campaign or referring site.
+ */
+export function buildDashboard(
+  rows: readonly Partial<ViewRecord>[],
+  previousRows: readonly Partial<ViewRecord>[],
+  options: {
+    since: string;
+    until: string;
+    titles?: Record<string, string>;
+    limit?: number;
+  },
+): Dashboard {
+  const totalsOf = (list: readonly Partial<ViewRecord>[]) => {
+    const t = { entries: 0, views: 0, variantViews: 0, conversions: 0 };
+    for (const row of list) {
+      if (isConversion(row)) t.conversions++;
+      else {
+        t.views++;
+        if (row.entry) t.entries++;
+        if (row.variant) t.variantViews++;
+      }
+    }
+    return t;
+  };
+  const days = new Map<string, Dashboard["days"][number]>();
+  for (
+    let d = new Date(`${options.since}T00:00:00Z`);
+    dayOf(d) <= options.until;
+    d = new Date(d.getTime() + 86_400_000)
+  )
+    days.set(dayOf(d), { day: dayOf(d), entries: 0, views: 0, conversions: 0 });
+  const campaigns = new Map<string, CampaignRow>();
+  const landing = new Map<
+    string,
+    { path: string; entries: number; conversions: number }
+  >();
+  const conversionNames = new Map<string, { name: string; count: number }>();
+  const campaignOf = (row: Partial<ViewRecord>) => {
+    if (
+      row.audience &&
+      row.audience !== DEFAULT_AUDIENCE &&
+      row.audience !== AUTO_AUDIENCE
+    )
+      return {
+        id: row.audience,
+        label: options.titles?.[row.audience] ?? row.audience,
+      };
+    const label = [row.source || "(direct)", row.medium, row.campaign]
+      .filter(Boolean)
+      .join(" / ");
+    return { id: label, label };
+  };
+  // Landing page of each conversion is unknown; it is attributed to its campaign only.
+  for (const row of rows) {
+    const day = row.day ? days.get(row.day) : undefined;
+    const campaign = campaignOf(row);
+    if (isConversion(row)) {
+      if (day) day.conversions++;
+      bump(campaigns, campaign.id, () => ({
+        ...campaign,
+        entries: 0,
+        conversions: 0,
+        rate: null,
+      })).conversions++;
+      bump(conversionNames, row.conversion!, () => ({
+        name: row.conversion!,
+        count: 0,
+      })).count++;
+      continue;
+    }
+    if (day) {
+      day.views++;
+      if (row.entry) day.entries++;
+    }
+    if (row.entry) {
+      bump(campaigns, campaign.id, () => ({
+        ...campaign,
+        entries: 0,
+        conversions: 0,
+        rate: null,
+      })).entries++;
+      bump(landing, row.path || "/", () => ({
+        path: row.path || "/",
+        entries: 0,
+        conversions: 0,
+      })).entries++;
+    }
+  }
+  const limit = options.limit ?? 15;
+  return {
+    days: [...days.values()],
+    totals: totalsOf(rows),
+    previous: totalsOf(previousRows),
+    campaigns: [...campaigns.values()]
+      .map((c) => ({
+        ...c,
+        rate: c.entries ? c.conversions / c.entries : null,
+      }))
+      .sort((a, b) => b.entries - a.entries || b.conversions - a.conversions)
+      .slice(0, limit),
+    landingPages: [...landing.values()]
+      .sort((a, b) => b.entries - a.entries)
+      .slice(0, limit),
+    conversions: [...conversionNames.values()].sort(
+      (a, b) => b.count - a.count,
+    ),
+  };
+}
+
+export type InstallCheck = {
+  id: "no-views" | "stale-views" | "single-page" | "proxy" | "no-pages";
+  level: "error" | "warning";
+  detail?: string;
+};
+
+/**
+ * Setup problems visible from the data: no view recorded, none recently,
+ * views from a single page (tracker on one template only), visitors arriving
+ * with a personalized campaign's UTM values but recorded without it (the
+ * middleware / proxy does not run), personalized campaigns without pages.
+ */
+export function installChecks(input: {
+  rows: readonly Partial<ViewRecord>[];
+  today: string;
+  manifest: {
+    audiences: {
+      key: string;
+      groups?: { parameter: string; value?: string | null }[][];
+      paths?: string[];
+    }[];
+  };
+  personalized: { key: string; pages?: unknown }[];
+}): InstallCheck[] {
+  const checks: InstallCheck[] = [];
+  const views = input.rows.filter((row) => !isConversion(row));
+  if (!views.length) return [{ id: "no-views", level: "error" }];
+  const last = views.reduce(
+    (max, row) => (row.day && row.day > max ? row.day : max),
+    "",
+  );
+  const age = (Date.parse(input.today) - Date.parse(last)) / 86_400_000;
+  if (age >= 3)
+    checks.push({ id: "stale-views", level: "warning", detail: last });
+  const paths = new Set(views.map((row) => row.path));
+  if (paths.size === 1 && views.length >= 20)
+    checks.push({ id: "single-page", level: "warning", detail: [...paths][0] });
+  // A recognized campaign's UTM source arrives, but the view was recorded as default.
+  const sources = new Set(
+    input.manifest.audiences.flatMap((audience) =>
+      (audience.groups ?? []).flatMap((group) =>
+        group
+          .filter((c) => c.parameter === "utm_source" && c.value)
+          .map((c) => String(c.value).toLowerCase()),
+      ),
+    ),
+  );
+  const missed = views.filter(
+    (row) =>
+      row.entry &&
+      row.utm &&
+      row.audience === DEFAULT_AUDIENCE &&
+      sources.has(String(row.source)),
+  ).length;
+  const matched = views.filter(
+    (row) => row.entry && row.audience !== DEFAULT_AUDIENCE,
+  ).length;
+  if (missed >= 3 && matched === 0)
+    checks.push({ id: "proxy", level: "error", detail: String(missed) });
+  const noPages = input.personalized.filter(
+    (campaign) => !Array.isArray(campaign.pages) || campaign.pages.length === 0,
+  );
+  if (noPages.length)
+    checks.push({
+      id: "no-pages",
+      level: "warning",
+      detail: noPages.map((c) => c.key).join(", "),
+    });
+  return checks;
 }

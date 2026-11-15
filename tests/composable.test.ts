@@ -45,7 +45,9 @@ async function siteProxy(req: NextRequest) {
     : `/en${url.pathname === "/" ? "" : url.pathname}`;
   url.pathname = decision.variantPath(internal);
   return decision.apply(
-    NextResponse.rewrite(url, { request: { headers: decision.requestHeaders } }),
+    NextResponse.rewrite(url, {
+      request: { headers: decision.requestHeaders },
+    }),
   );
 }
 const rewritten = (response: Response) =>
@@ -68,8 +70,15 @@ test("resolver composes with an existing locale rewrite", async () => {
   const cookie = setCookie.split(";")[0]!;
   const about = await siteProxy(request("/about", { cookie }));
   assert.equal(rewritten(about), "/en/about");
-  assert.equal(about.headers.get("x-middleware-request-x-utm-audience"), "coudac");
-  assert.equal(about.headers.get("set-cookie"), null, "no Set-Cookie off arrivals");
+  assert.equal(
+    about.headers.get("x-middleware-request-x-utm-audience"),
+    "coudac",
+  );
+  assert.equal(
+    about.headers.get("set-cookie"),
+    null,
+    "no Set-Cookie off arrivals",
+  );
 
   const plain = await siteProxy(request("/"));
   assert.equal(rewritten(plain), "/en");
@@ -98,10 +107,17 @@ test("resolver without rewrite never returns a variant", async () => {
 test("only / except rules", () => {
   assert.equal(matchesAudienceKeys("coudac", { only: "coudac" }), true);
   assert.equal(matchesAudienceKeys(null, { only: "coudac" }), false);
-  assert.equal(matchesAudienceKeys({ key: "ugc" }, { only: ["coudac", "ugc"] }), true);
+  assert.equal(
+    matchesAudienceKeys({ key: "ugc" }, { only: ["coudac", "ugc"] }),
+    true,
+  );
   assert.equal(matchesAudienceKeys("coudac", { except: "coudac" }), false);
   assert.equal(matchesAudienceKeys(null, { except: "coudac" }), true);
-  assert.equal(matchesAudienceKeys("default", { only: "default" }), false, "reserved key");
+  assert.equal(
+    matchesAudienceKeys("default", { only: "default" }),
+    false,
+    "reserved key",
+  );
   assert.equal(matchesAudienceKeys("ugc", {}), true);
 });
 

@@ -10,6 +10,7 @@ import type {
   Where,
 } from "payload";
 import { utmParameters } from "../utilities.js";
+import type { Ga4Options } from "./ga4.js";
 import {
   audienceDocToRule,
   parseSourceMemory,
@@ -25,6 +26,7 @@ import {
 import {
   AUTO_AUDIENCE,
   DEFAULT_AUDIENCE,
+  conversionSource,
   dayOf,
   parseViewEvent,
 } from "./stats.js";
@@ -127,6 +129,11 @@ export type PersonalizationOptions = {
     fields?: Field[];
   };
   overrides?: (collection: CollectionConfig) => CollectionConfig;
+  /**
+   * Optional: GA4 sessions and key events in each campaign's Statistics tab
+   * (Google Analytics Data API, read-only, cached 1 h).
+   */
+  ga4?: Ga4Options;
 };
 export type AudienceCollectionContext = {
   locale: "en" | "fr";
@@ -1139,6 +1146,7 @@ export function viewsCollection(settings: StatsSettings): CollectionConfig {
       text("source"),
       text("medium"),
       text("campaign"),
+      { ...text("conversion", true) } as Field,
     ],
   };
 }
@@ -1221,7 +1229,9 @@ function statsEndpoint(
         if (!event) return new Response(null, { status: 400 });
         // The page did not know the audience (static page without variant):
         // resolve it from the visitor's source memory, sent with the beacon.
-        if (event.audience === AUTO_AUDIENCE) {
+        // Source memory sent with the beacon (same-site cookie): resolves `auto`
+        // audiences and attributes conversions to the latest arrival.
+        if (event.audience === AUTO_AUDIENCE || event.conversion) {
           const cookie = (req.headers.get("cookie") ?? "")
             .split(/;\s*/)
             .find((part) => part.startsWith(`${settings.cookieName}=`));
@@ -1231,14 +1241,18 @@ function statsEndpoint(
           } catch {
             value = undefined;
           }
-          const resolved = updateSourceMemory({
-            memory: parseSourceMemory(value),
-            touch: null,
-            manifest: knownKeys.manifest,
-            maxAgeSeconds: settings.memoryMaxAgeSeconds,
-          }).audience;
-          event.audience = resolved?.key ?? DEFAULT_AUDIENCE;
-          event.variant = false;
+          const memory = parseSourceMemory(value);
+          if (event.audience === AUTO_AUDIENCE) {
+            const resolved = updateSourceMemory({
+              memory,
+              touch: null,
+              manifest: knownKeys.manifest,
+              maxAgeSeconds: settings.memoryMaxAgeSeconds,
+            }).audience;
+            event.audience = resolved?.key ?? DEFAULT_AUDIENCE;
+            event.variant = false;
+          }
+          if (event.conversion) Object.assign(event, conversionSource(memory));
         }
         const now = new Date();
         await req.payload.create({
@@ -1339,6 +1353,12 @@ export function campaignPersonalization(
       index: true,
       label: { en: "Personalize the site", fr: "Personnaliser le site" },
       admin: {
+        components: {
+          Cell: {
+            path: "payload-plugin-utm/client#CampaignStatusCell",
+            clientProps: { locale: context.locale },
+          },
+        },
         description: {
           en: "Visitors arriving with this campaign's UTM values (or from the sites below) are remembered 90 days and see the content targeted at this campaign.",
           fr: "Les visiteurs qui arrivent avec les UTM de cette campagne (ou depuis les sites ci-dessous) sont mémorisés 90 jours et voient le contenu destiné à cette campagne.",

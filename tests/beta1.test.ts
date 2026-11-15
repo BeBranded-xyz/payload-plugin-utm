@@ -26,7 +26,12 @@ const endpoint = (config: Config, path: string) =>
 beforeEach(() => clearManifestCache());
 
 test("referring site on any extension, without lookalikes", () => {
-  for (const host of ["coudac.com", "coudac.fr", "shop.coudac.co.uk", "coudac.com.au"])
+  for (const host of [
+    "coudac.com",
+    "coudac.fr",
+    "shop.coudac.co.uk",
+    "coudac.com.au",
+  ])
     assert.equal(domainMatches(host, "coudac.*"), true, host);
   for (const host of ["notcoudac.com", "coudac.evil.com", "coudac", ""])
     assert.equal(domainMatches(host, "coudac.*"), false, host);
@@ -35,16 +40,28 @@ test("referring site on any extension, without lookalikes", () => {
 });
 
 test("audience links accept site paths and http(s) URLs only", () => {
-  for (const ok of ["/contact", "/projects/coudac?x=1", "https://coudac.com/case"])
+  for (const ok of [
+    "/contact",
+    "/projects/coudac?x=1",
+    "https://coudac.com/case",
+  ])
     assert.equal(isSafeAudienceLink(ok), true, ok);
-  for (const bad of ["//evil.com", "/\\evil.com", "javascript:alert(1)", "contact", "/a b"])
+  for (const bad of [
+    "//evil.com",
+    "/\\evil.com",
+    "javascript:alert(1)",
+    "contact",
+    "/a b",
+  ])
     assert.equal(isSafeAudienceLink(bad), false, bad);
 });
 
 test("pages entered on an audience limit its variants (code mode)", async () => {
   const config = utmPlugin({ personalization: {} })({} as Config) as Config;
   const audiences = config.collections!.find((c) => c.slug === "utm-links")!;
-  const pages = allFields(audiences).find((f) => "name" in f && f.name === "pages") as {
+  const pages = allFields(audiences).find(
+    (f) => "name" in f && f.name === "pages",
+  ) as {
     validate: (v: unknown) => unknown;
   };
   assert.equal(pages.validate(["/", "/fr"]), true);
@@ -58,8 +75,21 @@ test("pages entered on an audience limit its variants (code mode)", async () => 
       logger: { error: () => {} },
       find: async () => ({
         docs: [
-          { id: 1, key: "coudac", pages: ["/", "/fr/"], conditions: [{ parameter: "referrer", operator: "equals", value: "coudac.*" }] },
-          { id: 2, key: "ugc", conditions: [{ parameter: "utm_source", operator: "equals", value: "ugc" }] },
+          {
+            id: 1,
+            key: "coudac",
+            pages: ["/", "/fr/"],
+            conditions: [
+              { parameter: "referrer", operator: "equals", value: "coudac.*" },
+            ],
+          },
+          {
+            id: 2,
+            key: "ugc",
+            conditions: [
+              { parameter: "utm_source", operator: "equals", value: "ugc" },
+            ],
+          },
         ],
       }),
     },
@@ -76,7 +106,9 @@ const manifest = (key: string): AudienceManifest => ({
       key,
       priority: 0,
       match: "any",
-      conditions: [{ parameter: "$referrer", operator: "equals", value: "coudac.com" }],
+      conditions: [
+        { parameter: "$referrer", operator: "equals", value: "coudac.com" },
+      ],
       paths: ["/", "/fr"],
     },
   ],
@@ -89,12 +121,23 @@ test("variant segments behind a locale are protected too", async () => {
     loadManifest: () => manifest("coudac"),
     rewrite: { prefix: "utm-audience", localePrefixes: ["fr", "en"] },
   });
-  assert.equal((await resolve(request("/fr/utm-audience/coudac/offres"))).redirect?.pathname, "/fr/offres");
-  assert.equal((await resolve(request("/fr/utm-audience/coudac"))).redirect?.pathname, "/fr");
-  assert.equal((await resolve(request("/utm-audience/coudac/a"))).redirect?.pathname, "/a");
+  assert.equal(
+    (await resolve(request("/fr/utm-audience/coudac/offres"))).redirect
+      ?.pathname,
+    "/fr/offres",
+  );
+  assert.equal(
+    (await resolve(request("/fr/utm-audience/coudac"))).redirect?.pathname,
+    "/fr",
+  );
+  assert.equal(
+    (await resolve(request("/utm-audience/coudac/a"))).redirect?.pathname,
+    "/a",
+  );
   assert.equal((await resolve(request("/fr/offres"))).redirect, null);
   assert.throws(
-    () => createPersonalizationResolver({ rewrite: { localePrefixes: ["../x"] } }),
+    () =>
+      createPersonalizationResolver({ rewrite: { localePrefixes: ["../x"] } }),
     /localePrefixes/,
   );
 });
@@ -124,17 +167,32 @@ test("expired manifests are served stale while one refresh runs", async () => {
 });
 
 test("stats endpoint resolves `auto` from the source-memory cookie", async () => {
-  const config = utmPlugin({ personalization: { stats: true } })({} as Config) as Config;
+  const config = utmPlugin({ personalization: { stats: true } })(
+    {} as Config,
+  ) as Config;
   const handler = endpoint(config, "/stats");
   const created: Record<string, unknown>[] = [];
   const req = (audience: unknown, cookie = "") =>
     ({
       headers: new Headers(cookie ? { cookie } : {}),
-      text: async () => JSON.stringify({ audience, path: "/about", variant: true }),
+      text: async () =>
+        JSON.stringify({ audience, path: "/about", variant: true }),
       payload: {
         logger: { error: () => {} },
         find: async () => ({
-          docs: [{ id: 1, key: "coudac", conditions: [{ parameter: "referrer", operator: "equals", value: "coudac.*" }] }],
+          docs: [
+            {
+              id: 1,
+              key: "coudac",
+              conditions: [
+                {
+                  parameter: "referrer",
+                  operator: "equals",
+                  value: "coudac.*",
+                },
+              ],
+            },
+          ],
         }),
         create: async ({ data }: { data: Record<string, unknown> }) => {
           created.push(data);
@@ -144,30 +202,61 @@ test("stats endpoint resolves `auto` from the source-memory cookie", async () =>
       },
     }) as unknown as PayloadRequest;
   const now = Math.floor(Date.now() / 1000);
-  const memory = serializeSourceMemory({ v: 1, f: { r: "coudac.fr", t: now }, l: { r: "coudac.fr", t: now }, s: { r: "coudac.fr", t: now } });
-  assert.equal((await handler(req("auto", `other=1; utm_memory=${memory}`))).status, 204);
+  const memory = serializeSourceMemory({
+    v: 1,
+    f: { r: "coudac.fr", t: now },
+    l: { r: "coudac.fr", t: now },
+    s: { r: "coudac.fr", t: now },
+  });
+  assert.equal(
+    (await handler(req("auto", `other=1; utm_memory=${memory}`))).status,
+    204,
+  );
   assert.equal(created[0]!.audience, "coudac");
-  assert.equal(created[0]!.variant, false, "auto views are never counted as personalized");
+  assert.equal(
+    created[0]!.variant,
+    false,
+    "auto views are never counted as personalized",
+  );
   assert.equal((await handler(req("auto"))).status, 204);
   assert.equal(created[1]!.audience, "default");
 });
 
 test("buildAudienceManifest reads the database directly with the plugin settings", async () => {
   const { buildAudienceManifest } = await import("../src/index.js");
-  const config = utmPlugin({ collectionSlug: "campaigns", personalization: { manifest: { limit: 7 } } })({} as Config) as Config;
+  const config = utmPlugin({
+    collectionSlug: "campaigns",
+    personalization: { manifest: { limit: 7 } },
+  })({} as Config) as Config;
   let seen: Record<string, unknown> = {};
   const payload = {
     config: { custom: config.custom },
     logger: { error: () => {} },
     find: async (args: Record<string, unknown>) => {
       seen = args;
-      return { docs: [{ id: 1, key: "coudac", pages: ["/fr/"], conditions: [{ parameter: "referrer", operator: "equals", value: "coudac.*" }] }] };
+      return {
+        docs: [
+          {
+            id: 1,
+            key: "coudac",
+            pages: ["/fr/"],
+            conditions: [
+              { parameter: "referrer", operator: "equals", value: "coudac.*" },
+            ],
+          },
+        ],
+      };
     },
   };
   const manifest = await buildAudienceManifest(payload as never);
   assert.equal(seen.collection, "campaigns");
-  assert.deepEqual((seen.where as { and: unknown[] }).and.at(-1), { personalize: { equals: true } });
+  assert.deepEqual((seen.where as { and: unknown[] }).and.at(-1), {
+    personalize: { equals: true },
+  });
   assert.equal(seen.limit, 7);
   assert.equal(seen.overrideAccess, true);
-  assert.deepEqual(manifest.audiences.map((a) => [a.key, a.paths]), [["coudac", ["/fr"]]]);
+  assert.deepEqual(
+    manifest.audiences.map((a) => [a.key, a.paths]),
+    [["coudac", ["/fr"]]],
+  );
 });

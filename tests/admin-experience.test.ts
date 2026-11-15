@@ -93,9 +93,7 @@ test("endsAt must be after startsAt and both are published in the manifest", asy
   const result = await utmPlugin({ personalization: {} })({
     collections: [],
   } as unknown as Config);
-  const audiences = result.collections!.find(
-    (c) => c.slug === "utm-links",
-  )!;
+  const audiences = result.collections!.find((c) => c.slug === "utm-links")!;
   const endsAt = named(allFields(audiences), "endsAt") as unknown as {
     validate: (v: unknown, o: { siblingData?: unknown }) => true | string;
   };

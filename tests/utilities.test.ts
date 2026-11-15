@@ -81,7 +81,10 @@ test("origin restrictions match exact origin, including protocol and port", () =
 });
 test("only the source is required; empty medium or campaign are left out", () => {
   assert.equal(buildUtmUrl({ ...base, source: " " }), null);
-  assert.equal(buildUtmUrl({ ...base, source: "你好" }, { normalization: "slug" }), null);
+  assert.equal(
+    buildUtmUrl({ ...base, source: "你好" }, { normalization: "slug" }),
+    null,
+  );
   const noMedium = buildUtmUrl({ ...base, medium: " ", campaign: "" })!;
   assert.equal(new URL(noMedium).searchParams.get("utm_source"), base.source);
   assert.equal(new URL(noMedium).searchParams.has("utm_medium"), false);

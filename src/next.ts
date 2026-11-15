@@ -297,7 +297,9 @@ export function createPersonalizationResolver(
       ? manifest.audiences.find((item) => item.key === audience!.key)?.paths
       : undefined;
     const variant =
-      prefix && audience && (!paths || paths.includes(normalizePath(url.pathname)))
+      prefix &&
+      audience &&
+      (!paths || paths.includes(normalizePath(url.pathname)))
         ? { prefix, key: audience.key }
         : null;
 
@@ -335,8 +337,7 @@ export function createPersonalizationMiddleware(
     request: NextRequest,
   ): Promise<NextResponse> {
     const decision = await resolve(request);
-    if (decision.redirect)
-      return NextResponse.redirect(decision.redirect, 308);
+    if (decision.redirect) return NextResponse.redirect(decision.redirect, 308);
     const init = { request: { headers: decision.requestHeaders } };
     if (decision.variant) {
       const target = request.nextUrl.clone();

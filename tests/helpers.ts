@@ -1,12 +1,17 @@
 import type { CollectionConfig, Field } from "payload";
 
 /** Named fields of a collection, through tabs, rows and collapsibles (not into named groups). */
-export function allFields(collection: Pick<CollectionConfig, "fields">): Field[] {
+export function allFields(
+  collection: Pick<CollectionConfig, "fields">,
+): Field[] {
   const walk = (fields: Field[]): Field[] =>
     fields.flatMap((field) => {
       if (field.type === "tabs")
         return field.tabs.flatMap((tab) => walk(tab.fields));
-      if ((field.type === "row" || field.type === "collapsible") && "fields" in field)
+      if (
+        (field.type === "row" || field.type === "collapsible") &&
+        "fields" in field
+      )
         return walk(field.fields);
       return [field];
     });

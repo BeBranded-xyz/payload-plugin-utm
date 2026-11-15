@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 — unreleased (0.2.0-beta.4 on npm under the `beta` tag)
+## 0.2.0 — unreleased (0.2.0-beta.5 on npm under the `beta` tag)
+
+0.2.0-beta.5, analytics: `trackConversion()` and conversions attributed to the visitor's campaign and latest arrival; dashboard in the Personalization view (KPIs vs previous period, arrivals and conversions per day, top campaigns with conversion rate, top landing pages, conversions by type); setup check (tracker missing or stale, single template, middleware not running, campaigns without pages); campaigns list status badges and *Arrivals (30 days)* column; detected campaigns show their landing page and can be created already personalizing it; optional GA4 sessions and key events per campaign (`personalization.ga4`, service account or token).
 
 0.2.0-beta.4, one menu: **UTM campaigns** replace UTM links + campaign audiences. A campaign carries a *Personalize the site* tab (recognized by its UTM values, OR referring sites, OR advanced rules; generated `key`; pages; content as `audienceContent`; dates; priority) and a *Statistics* tab. Only `utm_source` is required; medium, campaign and destination are optional. **Detected campaigns, not created yet** above the list (UTM values and referring sites without a campaign, one-click creation). Statistics are on by default with personalization. Rules support OR groups (`groups` in the manifest). Breaking for earlier betas: no `utm-audiences` collection, `personalization.audiencesSlug` removed, endpoints moved to `/api/utm-links/manifest` and `/api/utm-links/stats`, `getAudienceContent` reads campaigns.
 

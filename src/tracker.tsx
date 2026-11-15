@@ -105,8 +105,7 @@ export function PersonalizationTracker({
       previewParam,
     );
     if (stats && !preview) {
-      const url =
-        typeof stats === "string" ? stats : "/api/utm-links/stats";
+      const url = typeof stats === "string" ? stats : "/api/utm-links/stats";
       const body = JSON.stringify(detail);
       // text/plain beacon: no CORS preflight, survives navigation.
       if (!navigator.sendBeacon?.(url, body))
@@ -117,4 +116,42 @@ export function PersonalizationTracker({
     // onView is read at send time; a new function identity is not a new view.
   }, [audience, variant, eventName, dataLayer, stats, previewParam, pathname]);
   return null;
+}
+
+/**
+ * Records a conversion (lead form sent, call booked…) in the statistics,
+ * attributed to the visitor's campaign and latest arrival (read server side
+ * from the source-memory cookie). Call it from a Client Component; nothing is
+ * sent during admin previews. No identifier is stored.
+ *
+ * ```ts
+ * onSubmit={() => trackConversion('Contact form submit')}
+ * ```
+ */
+export function trackConversion(
+  name: string,
+  options: { endpoint?: string; previewParam?: string } = {},
+): void {
+  if (typeof window === "undefined" || !name.trim()) return;
+  if (
+    new URLSearchParams(window.location.search).has(
+      options.previewParam ?? "utm_preview",
+    )
+  )
+    return;
+  const url = options.endpoint ?? "/api/utm-links/stats";
+  const body = JSON.stringify({
+    type: "conversion",
+    name: name.trim().slice(0, 100),
+    path: window.location.pathname,
+    audience: "auto",
+  });
+  try {
+    if (!navigator.sendBeacon?.(url, body))
+      void fetch(url, { method: "POST", body, keepalive: true }).catch(
+        () => undefined,
+      );
+  } catch {
+    // Measurement never breaks the page.
+  }
 }

@@ -301,7 +301,16 @@ The view uses `DefaultTemplate` from `@payloadcms/next`, already installed in an
 
 ### Statistics
 
-On with personalization (`stats: false` to opt out): a **Statistics** section in the Personalization view, for the last 7, 30 or 90 days, the **Statistics** tab of each campaign, and the **detected campaigns** above the campaign list:
+On with personalization (`stats: false` to opt out). **Put the tracker on every page** (root layout or page template), not only on personalized ones: arrivals on blog posts and other pages are what the dashboard and the detected campaigns are built from.
+
+- **Dashboard** in the Personalization view (7, 30 or 90 days, each compared with the previous period): arrivals, page views, personalized views, conversions and conversion rate; arrivals per day with conversions; top campaigns (arrivals, conversions, rate) and top landing pages.
+- **Setup check** at the top of the view: no view recorded, none recently, views from a single page (tracker on one template only), visitors arriving with a personalized campaign's UTM values but not recognized (middleware / proxy not running), personalized campaigns without *Pages it changes*.
+- **Campaigns list**: status badges (*Personalizes*, *Link only*, *Scheduled*, *Ended*, *Archived*) and an *Arrivals (30 days)* column (computed, not stored; add it from *Columns* if your list already has saved columns).
+- **Detected campaigns** above the list, with their most frequent landing page and two buttons: *Create the campaign*, or *Create and personalize /landing-page* (personalization ticked, page filled).
+- **Conversions**: call `trackConversion('Contact form submit')` (from `payload-plugin-utm/tracker`) when a lead form is sent or a call booked. Each conversion is attributed to the visitor's campaign and latest arrival, read server side from the source-memory cookie; the campaign's *Statistics* tab and the dashboard show arrivals → conversions → rate.
+- **GA4 (optional)**: `personalization.ga4: { propertyId: '123456789', credentials: { client_email, private_key } }` (a service account with *Viewer* access on the property, or `getAccessToken: async () => token`) adds GA4 sessions and key events of the last 30 days to each campaign's *Statistics* tab (Data API, read-only, cached 1 h, signed-in users only).
+
+Also in the view:
 
 - per audience: **entries** (first page of a visit), page views and **personalized views** (pages that showed content for that audience);
 - per page: views by audience, split between the personalized and the default version;
@@ -314,6 +323,13 @@ Views are recorded by the tracker, so add it to your pages (or root layout; it f
 import { PersonalizationTracker } from 'payload-plugin-utm/tracker'
 
 <PersonalizationTracker audience={audience?.key ?? null} variant={pageHasVariant} stats />
+```
+
+```tsx
+'use client'
+import { trackConversion } from 'payload-plugin-utm/tracker'
+
+<form onSubmit={() => trackConversion('Contact form submit')}>…</form>
 ```
 
 On pages that do not know the audience (static pages without a variant), omit `audience`: the endpoint resolves it from the `utm_memory` cookie sent with the beacon (`stats.cookieName` if you renamed it). `onView={(view) => track('Personalized view', view)}` calls your analytics from a Client Component.
