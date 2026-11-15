@@ -9,10 +9,12 @@ import {
   useField,
   useForm,
   useFormFields,
+  useLivePreviewContext,
   useRowLabel,
   useTranslation,
 } from "@payloadcms/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DefaultCellComponentProps, TextFieldClientProps } from "payload";
 import {
   audienceDraftFromLink,
@@ -582,6 +584,7 @@ function useAudiences(
 const editorMessages = {
   en: {
     panelTitle: "Personalization",
+    livePreviewAs: "Live Preview as",
     noBlocks: "No personalized block on this document yet.",
     defaultVisitor: "Default visitor",
     view: "View",
@@ -625,6 +628,7 @@ const editorMessages = {
   },
   fr: {
     panelTitle: "Personnalisation",
+    livePreviewAs: "Live Preview vue par",
     noBlocks: "Aucun bloc personnalisé sur ce document pour l’instant.",
     defaultVisitor: "Visiteur normal",
     view: "Voir",
@@ -853,6 +857,14 @@ export function PersonalizationPanel({
   return (
     <div className="field-type" style={{ display: "grid", gap: 10 }}>
       <FieldLabel label={text.panelTitle} />
+      {previewParam && (
+        <LivePreviewAudience
+          label={text.livePreviewAs}
+          defaultLabel={text.defaultVisitor}
+          audiences={live}
+          param={previewParam}
+        />
+      )}
       {audiences === "error" && <p style={muted}>{text.loadError}</p>}
       {blocks.length === 0 && <p style={muted}>{text.noBlocks}</p>}
       {used.map((item) => (
@@ -999,6 +1011,110 @@ export function PersonalizationPanel({
         </details>
       )}
     </div>
+  );
+}
+
+/** Live Preview URL showing the page as `key` sees it (`default`: no campaign). */
+export function livePreviewUrl(
+  current: string,
+  param: string,
+  key: string,
+  base = "http://localhost",
+): string | null {
+  try {
+    const url = new URL(current, base);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.searchParams.set(param, key);
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Campaign picker for Payload's Live Preview: reloads the preview with the
+ * preview parameter, so editors see the page as a campaign while they edit.
+ * Kept when Payload recomputes the URL (save, locale change).
+ */
+function LivePreviewAudience({
+  label,
+  defaultLabel,
+  audiences,
+  param,
+}: {
+  label: string;
+  defaultLabel: string;
+  audiences: LoadedAudience[];
+  param: string;
+}) {
+  const preview = useLivePreviewContext() as
+    | Partial<ReturnType<typeof useLivePreviewContext>>
+    | undefined;
+  const [selected, setSelected] = useState("default");
+  // `url` is the iframe address; Payload resets it on save or locale change.
+  const current = typeof preview?.url === "string" ? preview.url : "";
+  const setURL = preview?.setURL;
+  useEffect(() => {
+    if (!current || !setURL || selected === "default") return;
+    let shown: string | null = null;
+    try {
+      shown = new URL(current, window.location.href).searchParams.get(param);
+    } catch {
+      return;
+    }
+    if (shown === selected) return;
+    const next = livePreviewUrl(current, param, selected, window.location.href);
+    if (next) setURL(next);
+  }, [current, param, selected, setURL]);
+  const previewing = Boolean(preview?.isLivePreviewing);
+  // Shown in Payload's Live Preview toolbar when it is there (falls back to the panel).
+  const [toolbar, setToolbar] = useState<Element | null>(null);
+  useEffect(() => {
+    if (!previewing) {
+      setToolbar(null);
+      return;
+    }
+    let tries = 0;
+    const find = () => {
+      const host = document.querySelector(".live-preview-toolbar-controls");
+      if (host) setToolbar(host);
+      else if (tries++ < 20) timer = window.setTimeout(find, 150);
+    };
+    let timer = window.setTimeout(find, 0);
+    return () => window.clearTimeout(timer);
+  }, [previewing]);
+  if (!preview?.isLivePreviewEnabled || !setURL) return null;
+  const select = (compact: boolean) => (
+    <select
+      aria-label={label}
+      title={label}
+      value={selected}
+      onChange={(event) => {
+        const key = event.target.value;
+        setSelected(key);
+        const next = current
+          ? livePreviewUrl(current, param, key, window.location.href)
+          : null;
+        if (next) setURL(next);
+      }}
+      style={compact ? { maxWidth: 220 } : { width: "100%" }}
+    >
+      <option value="default">
+        {compact ? `🎯 ${defaultLabel}` : defaultLabel}
+      </option>
+      {audiences.map((item) => (
+        <option key={String(item.id)} value={item.key}>
+          {compact ? `🎯 ${item.title}` : item.title}
+        </option>
+      ))}
+    </select>
+  );
+  if (toolbar) return createPortal(select(true), toolbar);
+  return (
+    <label style={muted}>
+      {label}
+      {select(false)}
+    </label>
   );
 }
 

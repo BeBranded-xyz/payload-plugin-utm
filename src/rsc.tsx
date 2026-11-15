@@ -1,15 +1,15 @@
 /**
  * Server components for the Payload admin (import map: `payload-plugin-utm/rsc`).
  */
-import { DefaultTemplate } from "@payloadcms/next/templates";
 import { Gutter, SetStepNav } from "@payloadcms/ui";
 import type {
   AdminViewServerProps,
   CollectionSlug,
   GlobalSlug,
   Payload,
-  TypedUser,
+  PayloadRequest,
 } from "payload";
+import type { ComponentType, ReactNode } from "react";
 import {
   CreateDetectedCampaign,
   PersonalizationSimulator,
@@ -53,6 +53,8 @@ type PluginViewOptions = {
   statsLimit?: number | null;
   targets: PersonalizationTarget[];
   blockLabels: Record<string, unknown>;
+  /** Import map key of DefaultTemplate (its module differs in Payload 3 and 4). */
+  templatePath?: string;
 };
 
 const t = {
@@ -232,11 +234,17 @@ export async function PersonalizationView(
   props: AdminViewServerProps & { pluginOptions: PluginViewOptions },
 ) {
   const {
+    importMap,
     initPageResult,
     params,
     searchParams,
     pluginOptions: options,
   } = props;
+  const DefaultTemplate = (importMap[
+    options.templatePath ?? "@payloadcms/next/templates#DefaultTemplate"
+  ] ?? (({ children }: { children?: ReactNode }) => children)) as ComponentType<
+    Record<string, unknown> & { children?: ReactNode }
+  >;
   const { req, permissions, visibleEntities, locale } = initPageResult;
   const { payload } = req;
   const text = t[options.locale];
@@ -783,7 +791,7 @@ type DetectedOptions = {
 /** Above the campaigns list: UTM values and referring sites seen but not created. */
 export async function DetectedCampaigns(props: {
   payload: Payload;
-  user?: TypedUser;
+  user?: NonNullable<PayloadRequest["user"]>;
   pluginOptions: DetectedOptions;
 }) {
   const { payload, user, pluginOptions: options } = props;

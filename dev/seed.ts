@@ -2,14 +2,14 @@ import type { Payload } from "payload";
 
 /** Idempotent demo data: a user, a Coudac audience, a home page with variants, one UTM link. */
 export async function seed(payload: Payload) {
-  const users = await payload.count({ collection: "users" });
+  const users = await payload.count({ overrideAccess: true, collection: "users" });
   if (users.totalDocs > 0) return;
   payload.logger.info("Seeding demo data…");
-  await payload.create({
+  await payload.create({ overrideAccess: true,
     collection: "users",
     data: { email: "dev@example.com", password: "test" } as never,
   });
-  const coudac = await payload.create({
+  const coudac = await payload.create({ overrideAccess: true,
     collection: "utm-links" as never,
     data: {
       title: "Coudac (crédit du pied de page)",
@@ -26,7 +26,7 @@ export async function seed(payload: Payload) {
   });
   const only = { mode: "only", audiences: [coudac.id] };
   const except = { mode: "except", audiences: [coudac.id] };
-  await payload.create({
+  await payload.create({ overrideAccess: true,
     collection: "pages",
     locale: "fr",
     data: {
@@ -40,12 +40,12 @@ export async function seed(payload: Payload) {
       ],
     } as never,
   });
-  await payload.create({
+  await payload.create({ overrideAccess: true,
     collection: "pages",
     locale: "fr",
     data: { title: "À propos", slug: "about", _status: "published", layout: [{ blockType: "cta", label: "Nous contacter", personalization: { mode: "all" } }] } as never,
   });
-  await payload.create({
+  await payload.create({ overrideAccess: true,
     collection: "utm-links" as never,
     data: {
       title: "Newsletter novembre",

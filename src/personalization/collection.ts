@@ -32,6 +32,17 @@ import {
 } from "./stats.js";
 
 /** Audience links: a same-site path or an absolute http(s) URL, nothing else. */
+/** Name of an editor-defined campaign text, usable as `{{audience.<name>}}`. */
+export const CUSTOM_TEXT_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const BUILT_IN_CONTENT = new Set([
+  "displayName",
+  "tagline",
+  "linkLabel",
+  "linkUrl",
+  "image",
+  "texts",
+]);
+
 export function isSafeAudienceLink(value: string): boolean {
   const text = value.trim();
   if (/^\/(?![/\\])/.test(text)) return !/\s/.test(text);
@@ -245,6 +256,13 @@ const labelOf = (block: Block): unknown => {
     : block.slug;
 };
 
+/**
+ * Payload 3 keeps references to `config.blocks` in `blockReferences`;
+ * Payload 4 removed the property and merged slugs into `blocks`.
+ */
+const blockReferencesOf = (field: Field): (Block | string)[] | undefined =>
+  (field as { blockReferences?: (Block | string)[] }).blockReferences;
+
 /** True when these fields hold a block carrying the personalization group. */
 function containsPersonalizedBlock(
   fields: Field[],
@@ -252,12 +270,14 @@ function containsPersonalizedBlock(
 ): boolean {
   return fields.some((field) => {
     if (field.type === "blocks")
-      return [...(field.blocks ?? []), ...(field.blockReferences ?? [])].some(
-        (block) =>
-          typeof block === "string"
-            ? personalizedSlugs.has(block)
-            : personalizedSlugs.has(block.slug) ||
-              containsPersonalizedBlock(block.fields, personalizedSlugs),
+      return [
+        ...(field.blocks ?? []),
+        ...(blockReferencesOf(field) ?? []),
+      ].some((block) =>
+        typeof block === "string"
+          ? personalizedSlugs.has(block)
+          : personalizedSlugs.has(block.slug) ||
+            containsPersonalizedBlock(block.fields, personalizedSlugs),
       );
     if (field.type === "tabs")
       return field.tabs.some((tab) =>
@@ -318,10 +338,13 @@ function withBlockFields(
     if (field.type === "blocks")
       return {
         ...field,
-        blocks: (field.blocks ?? []).map(apply),
-        ...(field.blockReferences
+        // Payload 4 also accepts slugs of `config.blocks` here.
+        blocks: (field.blocks ?? []).map((block: Block | string) =>
+          typeof block === "string" ? block : apply(block),
+        ),
+        ...(blockReferencesOf(field)
           ? {
-              blockReferences: field.blockReferences.map((ref) =>
+              blockReferences: blockReferencesOf(field)!.map((ref) =>
                 typeof ref === "string" ? ref : apply(ref),
               ),
             }
@@ -1057,6 +1080,54 @@ export function audiencesCollection(
               ]
             : []),
           ...(options.content?.fields ?? []),
+          {
+            name: "texts",
+            type: "array",
+            label: { en: "Other texts", fr: "Autres textes" },
+            labels: {
+              singular: { en: "Text", fr: "Texte" },
+              plural: { en: "Texts", fr: "Textes" },
+            },
+            maxRows: 50,
+            admin: {
+              initCollapsed: false,
+              description: {
+                en: "Add your own texts for this campaign: a name, then the text. Use them in blocks with {{audience.<name>}}.",
+                fr: "Ajoutez vos propres textes pour cette campagne : un nom, puis le texte. Utilisez-les dans les blocs avec {{audience.<nom>}}.",
+              },
+            },
+            fields: [
+              {
+                type: "row",
+                fields: [
+                  {
+                    name: "name",
+                    type: "text",
+                    required: true,
+                    maxLength: 64,
+                    label: { en: "Name", fr: "Nom" },
+                    admin: {
+                      width: "30%",
+                      placeholder: "offer",
+                    },
+                    validate: (value: unknown) =>
+                      (typeof value === "string" &&
+                        CUSTOM_TEXT_NAME.test(value) &&
+                        !BUILT_IN_CONTENT.has(value)) ||
+                      "Letters, digits and _ only, starting with a letter; not displayName, tagline, linkLabel, linkUrl, image or texts.",
+                  } as Field,
+                  {
+                    name: "value",
+                    type: "textarea",
+                    localized: true,
+                    maxLength: 2000,
+                    label: { en: "Text", fr: "Texte" },
+                    admin: { width: "70%", rows: 2 },
+                  },
+                ],
+              },
+            ],
+          } as Field,
         ],
       },
       {
@@ -1136,6 +1207,10 @@ export function viewsCollection(settings: StatsSettings): CollectionConfig {
       delete: authenticated,
     },
     timestamps: false,
+    // Payload 4 enables versions and authorship by default; versions also
+    // require timestamps. Anonymous, high-volume rows need neither.
+    versions: false,
+    ...({ authorship: false } as object),
     fields: [
       { ...text("day", true), required: true } as Field,
       { ...text("audience", true), required: true } as Field,

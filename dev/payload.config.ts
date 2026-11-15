@@ -32,7 +32,17 @@ export default buildConfig({
     { slug: "users", auth: true, fields: [] },
     {
       slug: "pages",
-      admin: { useAsTitle: "title" },
+      admin: {
+        useAsTitle: "title",
+        // Live Preview through the draft route: drafts shown, campaign picked in the sidebar.
+        livePreview: {
+          url: ({ data, locale }) => {
+            const slug = data?.slug === "home" ? "" : `/${String(data?.slug ?? "")}`;
+            const path = locale?.code === "en" ? `/en${slug}` : slug || "/";
+            return `/api/utm-preview?path=${encodeURIComponent(path)}`;
+          },
+        },
+      },
       versions: { drafts: true },
       access: { read: () => true },
       fields: [

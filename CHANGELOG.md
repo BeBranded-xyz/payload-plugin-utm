@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 — unreleased (0.2.0-beta.5 on npm under the `beta` tag)
+## 0.2.0 — unreleased (0.2.0-beta.6 on npm under the `beta` tag)
+
+0.2.0-beta.6, editing and compatibility: **Payload 4** support (tested on 4.0.0-beta.9; block slugs in `blocks`, `DefaultTemplate` from `@payloadcms/ui/rsc`, no default versions or authorship on the plugin's collections; CI runs on Payload 3 and 4); **Live Preview as a campaign** (🎯 menu in Payload's Live Preview toolbar, kept on save); **Other texts** on campaigns: editors add named, localized texts used as `{{audience.<name>}}` (`flattenAudienceContent`).
 
 0.2.0-beta.5, analytics: `trackConversion()` and conversions attributed to the visitor's campaign and latest arrival; dashboard in the Personalization view (KPIs vs previous period, arrivals and conversions per day, top campaigns with conversion rate, top landing pages, conversions by type); setup check (tracker missing or stale, single template, middleware not running, campaigns without pages); campaigns list status badges and *Arrivals (30 days)* column; detected campaigns show their landing page and can be created already personalizing it; optional GA4 sessions and key events per campaign (`personalization.ga4`, service account or token).
 

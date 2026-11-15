@@ -1,6 +1,6 @@
 {
   "name": "payload-plugin-utm",
-  "version": "0.2.0-beta.5",
+  "version": "0.2.0-beta.6",
   "description": "Campaign links, live UTM generation, CSV exports and opt-in UTM-based content personalization for Payload CMS 3.",
   "type": "module",
   "license": "MIT",
@@ -94,10 +94,10 @@
   },
   "packageManager": "pnpm@10.28.0",
   "peerDependencies": {
-    "@payloadcms/next": "^3.92.0",
-    "@payloadcms/ui": "^3.92.0",
+    "@payloadcms/next": "^3.92.0 || >=4.0.0-beta.9 <5",
+    "@payloadcms/ui": "^3.92.0 || >=4.0.0-beta.9 <5",
     "next": ">=15.0.0",
-    "payload": "^3.92.0",
+    "payload": "^3.92.0 || >=4.0.0-beta.9 <5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -39,6 +39,31 @@ export async function getAudienceContent(
   const content = (result.docs[0] as { audienceContent?: unknown } | undefined)
     ?.audienceContent;
   return content && typeof content === "object"
-    ? (content as Record<string, unknown>)
+    ? flattenAudienceContent(content as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Campaign content with the editor's "Other texts" (`texts: [{ name, value }]`)
+ * lifted to top-level keys, so `{{audience.offer}}` and `content.offer` work.
+ * Built-in fields win over a text of the same name.
+ */
+export function flattenAudienceContent(
+  content: Record<string, unknown>,
+): Record<string, unknown> {
+  const { texts, ...rest } = content;
+  const extra: Record<string, unknown> = {};
+  if (Array.isArray(texts))
+    for (const row of texts) {
+      const name = (row as { name?: unknown } | null)?.name;
+      const value = (row as { value?: unknown } | null)?.value;
+      if (
+        typeof name === "string" &&
+        /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) &&
+        typeof value === "string" &&
+        !(name in rest)
+      )
+        extra[name] = value;
+    }
+  return { ...extra, ...rest };
 }

@@ -5,6 +5,7 @@ import type {
   Field,
   Plugin,
 } from "payload";
+import * as payloadRuntime from "payload";
 import type {
   AudienceCollectionContext,
   PersonalizationOptions,
@@ -40,7 +41,10 @@ export {
   type PersonalizationOptions,
 } from "./personalization/collection.js";
 export * from "./personalization/match.js";
-export { getAudienceContent } from "./personalization/server.js";
+export {
+  flattenAudienceContent,
+  getAudienceContent,
+} from "./personalization/server.js";
 export { buildAudienceManifest } from "./personalization/collection.js";
 export type { Ga4Options } from "./personalization/ga4.js";
 export * from "./personalization/stats.js";
@@ -106,6 +110,10 @@ export function utmPlugin(options: UtmPluginOptions = {}): Plugin {
     });
     let collection: CollectionConfig = {
       slug,
+      // Same schema on Payload 3 and 4 (4 turns versions and createdBy/updatedBy
+      // on by default); `overrides` can enable them.
+      versions: false,
+      ...({ authorship: false } as object),
       labels: {
         singular: { en: "UTM campaign", fr: "Campagne UTM" },
         plural: { en: "UTM campaigns", fr: "Campagnes UTM" },
@@ -654,6 +662,12 @@ function withPersonalization(
       );
   }
   if (viewPath === null) return result;
+  // Payload 4 moved DefaultTemplate from @payloadcms/next/templates to
+  // @payloadcms/ui/rsc; `createPayloadRequestFromWebRequest` only exists in 4.
+  const templatePath =
+    "createPayloadRequestFromWebRequest" in payloadRuntime
+      ? "@payloadcms/ui/rsc#DefaultTemplate"
+      : "@payloadcms/next/templates#DefaultTemplate";
   const views = result.admin?.components?.views ?? {};
   if (views.utmPersonalization)
     throw new Error(
@@ -663,6 +677,10 @@ function withPersonalization(
     ...result,
     admin: {
       ...result.admin,
+      dependencies: {
+        ...result.admin?.dependencies,
+        utmPersonalizationTemplate: { path: templatePath, type: "component" },
+      },
       components: {
         ...result.admin?.components,
         views: {
@@ -681,6 +699,7 @@ function withPersonalization(
                   statsLimit: stats?.reportLimit ?? null,
                   targets,
                   blockLabels,
+                  templatePath,
                 },
               },
             },
