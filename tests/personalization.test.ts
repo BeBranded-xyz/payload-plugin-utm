@@ -13,6 +13,7 @@ import { utmPlugin } from "../src/index.js";
 import {
   clearManifestCache,
   createPersonalizationMiddleware,
+  createPersonalizationResolver,
 } from "../src/next.js";
 import {
   REFERRER_PARAMETER,
@@ -1048,4 +1049,60 @@ test("referrer condition values must be domains; content fields are added", asyn
   assert.notEqual(check("not a domain"), true);
   assert.equal(check("not a domain", "utm_source"), true);
   assert.equal(check("coud", "referrer", "contains"), true);
+});
+
+test("visit lifetime: session cookie, gone on the next visit, former memory cookie deleted", async () => {
+  type Cookies = {
+    cookies: {
+      get: (
+        n: string,
+      ) => { value: string; maxAge?: number; expires?: unknown } | undefined;
+    };
+  };
+  const cookieOf = (response: Response, name: string) =>
+    (response as unknown as Cookies).cookies.get(name);
+  const run = middleware({ cookie: { lifetime: "visit" } });
+  const landing = await run(
+    request("/menu?utm_source=restaurant-a&utm_medium=flyer"),
+  );
+  assert.equal(forwarded(landing, "x-utm-audience"), "restaurant-a");
+  const visit = cookieOf(landing, "utm_visit")!;
+  assert.ok(visit, "memory written under utm_visit");
+  assert.equal(visit.maxAge, undefined, "session cookie: no Max-Age");
+  assert.equal(cookieOf(landing, "utm_memory"), undefined);
+
+  // Same visit: the audience follows the visitor from page to page.
+  const next = await run(request("/contact", `utm_visit=${visit.value}`));
+  assert.equal(forwarded(next, "x-utm-audience"), "restaurant-a");
+
+  // Later (cookie still there, e.g. restored session): the arrival has expired.
+  const stale = serializeSourceMemory({
+    v: 1,
+    s: { p: { utm_source: "restaurant-a", utm_medium: "flyer" }, t: 1 },
+  });
+  const later = await run(request("/", `utm_visit=${stale}`));
+  assert.equal(forwarded(later, "x-utm-audience"), null);
+
+  // A visitor still carrying the former 90-day cookie: ignored and deleted.
+  const old = serializeSourceMemory({
+    v: 1,
+    s: {
+      p: { utm_source: "restaurant-a", utm_medium: "flyer" },
+      t: Math.floor(Date.now() / 1000),
+    },
+  });
+  const returning = await run(request("/", `utm_memory=${old}`));
+  assert.equal(forwarded(returning, "x-utm-audience"), null);
+  const deleted = cookieOf(returning, "utm_memory");
+  assert.ok(deleted, "former cookie overwritten");
+  assert.equal(deleted.value, "");
+
+  assert.throws(
+    () =>
+      createPersonalizationResolver({
+        loadManifest: () => manifest,
+        cookie: { lifetime: "forever" as never },
+      }),
+    /lifetime/,
+  );
 });

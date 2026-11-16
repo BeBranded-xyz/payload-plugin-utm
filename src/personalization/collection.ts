@@ -12,6 +12,11 @@ import type {
 import { utmParameters } from "../utilities.js";
 import type { Ga4Options } from "./ga4.js";
 import {
+  AUDIENCE_COOKIE,
+  PERSISTENT_MAX_AGE_SECONDS,
+  VISIT_COOKIE,
+  VISIT_MAX_AGE_SECONDS,
+  type CookieLifetime,
   audienceDocToRule,
   parseSourceMemory,
   updateSourceMemory,
@@ -112,6 +117,8 @@ export type PersonalizationOptions = {
          */
         cookieName?: string;
         memoryMaxAgeSeconds?: number;
+        /** Same as the middleware `cookie.lifetime`: sets the default cookie name and max age. */
+        memoryLifetime?: CookieLifetime;
       };
   /**
    * Admin overview at `/admin/personalization` (audiences × documents × links,
@@ -1176,8 +1183,14 @@ export function statsSettings(
     options.stats === true || options.stats === undefined ? {} : options.stats;
   return {
     slug: custom.slug ?? "utm-personalization-views",
-    cookieName: custom.cookieName ?? "utm_memory",
-    memoryMaxAgeSeconds: custom.memoryMaxAgeSeconds ?? 60 * 60 * 24 * 90,
+    cookieName:
+      custom.cookieName ??
+      (custom.memoryLifetime === "visit" ? VISIT_COOKIE : AUDIENCE_COOKIE),
+    memoryMaxAgeSeconds:
+      custom.memoryMaxAgeSeconds ??
+      (custom.memoryLifetime === "visit"
+        ? VISIT_MAX_AGE_SECONDS
+        : PERSISTENT_MAX_AGE_SECONDS),
     retentionDays: custom.retentionDays ?? 180,
     allowedOrigins: custom.allowedOrigins,
     reportLimit: custom.reportLimit ?? 50_000,

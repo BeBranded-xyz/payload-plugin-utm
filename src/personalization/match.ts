@@ -61,6 +61,13 @@ export const AUDIENCE_HEADER = "x-utm-audience";
 export const AUDIENCE_ID_HEADER = "x-utm-audience-id";
 /** Cookie holding the visitor's source memory (see `SourceMemory`). */
 export const AUDIENCE_COOKIE = "utm_memory";
+/** How long the source memory lives: until it expires (`persistent`) or for the current visit only (`visit`). */
+export type CookieLifetime = "persistent" | "visit";
+/** Visit mode: session cookie name and how long an arrival counts (30 minutes). */
+export const VISIT_COOKIE = "utm_visit";
+export const VISIT_MAX_AGE_SECONDS = 60 * 30;
+/** Persistent mode: 90 days. */
+export const PERSISTENT_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 /** Request header carrying the serialized source memory to Server Components. */
 export const SOURCE_MEMORY_HEADER = "x-utm-source-memory";
 export const utmQueryParameters = Object.values(utmParameters);

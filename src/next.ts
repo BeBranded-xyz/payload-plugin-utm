@@ -5,6 +5,10 @@
 import { NextResponse, type NextRequest } from "next/server.js";
 import {
   AUDIENCE_COOKIE,
+  PERSISTENT_MAX_AGE_SECONDS,
+  VISIT_COOKIE,
+  VISIT_MAX_AGE_SECONDS,
+  type CookieLifetime,
   AUDIENCE_HEADER,
   AUDIENCE_ID_HEADER,
   SOURCE_MEMORY_HEADER,
@@ -36,8 +40,25 @@ export type PersonalizationMiddlewareOptions = {
    * Remember where the visitor came from (UTM parameters and referring site,
    * first/latest/sticky arrival), 90 days by default. `false` personalizes only
    * the landing request.
+   *
+   * `lifetime: "visit"` keeps the audience for the current visit only: a
+   * session cookie (no `Max-Age`, gone when the browser closes) named
+   * `utm_visit` by default, whose arrival also expires after `maxAgeSeconds`
+   * (30 minutes by default). A visitor who comes back without the campaign
+   * link or referring site sees the default content again. Cookies left by
+   * the persistent mode (`utm_memory`, or `clearCookies`) are deleted.
    */
-  cookie?: false | { name?: string; maxAgeSeconds?: number; secure?: boolean };
+  cookie?:
+    | false
+    | {
+        name?: string;
+        maxAgeSeconds?: number;
+        secure?: boolean;
+        /** `"persistent"` (default) or `"visit"`. */
+        lifetime?: CookieLifetime;
+        /** Cookies to delete when found, e.g. a former memory cookie. Default in visit mode: `["utm_memory"]`. */
+        clearCookies?: string[];
+      };
   /** Return false to neither read nor write the cookie (e.g. no consent). The landing request is still personalized. */
   consent?: (request: NextRequest) => boolean;
   /**
@@ -71,7 +92,8 @@ export type PersonalizationCookie = {
   name: string;
   value: string;
   options: {
-    maxAge: number;
+    /** Absent for a visit (session) cookie. */
+    maxAge?: number;
     path: string;
     httpOnly: boolean;
     sameSite: "lax";
@@ -96,7 +118,9 @@ export type PersonalizationDecision = {
   variantPath: (pathname: string) => string;
   /** Source memory cookie to write (arrivals only), or null. */
   cookie: PersonalizationCookie | null;
-  /** Sets `cookie` on the response you built (rewrite, next, redirect…) and returns it. */
+  /** Cookies to delete (former memory cookies found on the request). */
+  clearCookies: string[];
+  /** Sets `cookie` (and deletes `clearCookies`) on the response you built (rewrite, next, redirect…) and returns it. */
   apply: <R extends NextResponse>(response: R) => R;
 };
 
@@ -184,11 +208,21 @@ export function createPersonalizationResolver(
     throw new Error(
       "createPersonalizationMiddleware: previewParam must be a URL parameter name.",
     );
+  const cookieOptions = options.cookie === false ? null : options.cookie;
+  const lifetime: CookieLifetime = cookieOptions?.lifetime ?? "persistent";
+  if (lifetime !== "persistent" && lifetime !== "visit")
+    throw new Error(
+      'createPersonalizationMiddleware: cookie.lifetime must be "persistent" or "visit".',
+    );
+  const visit = lifetime === "visit";
   const cookieName =
-    (options.cookie !== false && options.cookie?.name) || AUDIENCE_COOKIE;
+    cookieOptions?.name || (visit ? VISIT_COOKIE : AUDIENCE_COOKIE);
   const maxAge =
-    (options.cookie !== false && options.cookie?.maxAgeSeconds) ||
-    60 * 60 * 24 * 90;
+    cookieOptions?.maxAgeSeconds ||
+    (visit ? VISIT_MAX_AGE_SECONDS : PERSISTENT_MAX_AGE_SECONDS);
+  const staleCookies = (
+    cookieOptions?.clearCookies ?? (visit ? [AUDIENCE_COOKIE] : [])
+  ).filter((name) => name && name !== cookieName);
   const prefix =
     options.rewrite &&
     "/" + (options.rewrite.prefix ?? "/utm-audience").replace(/^\/+|\/+$/g, "");
@@ -229,12 +263,16 @@ export function createPersonalizationResolver(
     ): PersonalizationDecision => {
       const variant = extra.variant ?? null;
       const cookie = extra.cookie ?? null;
+      const clearCookies = staleCookies.filter((name) =>
+        request.cookies.has(name),
+      );
       return {
         audience,
         requestHeaders: headers,
         redirect: null,
         variant,
         cookie,
+        clearCookies,
         variantPath: (pathname) =>
           variant
             ? `${variant.prefix}/${variant.key}${pathname === "/" ? "" : pathname}`
@@ -242,6 +280,7 @@ export function createPersonalizationResolver(
         apply: (response) => {
           if (cookie)
             response.cookies.set(cookie.name, cookie.value, cookie.options);
+          for (const name of clearCookies) response.cookies.delete(name);
           return response;
         },
         ...extra,
@@ -311,7 +350,8 @@ export function createPersonalizationResolver(
             // Next encodes cookie values itself; pass raw JSON to avoid double encoding.
             value: JSON.stringify(memory),
             options: {
-              maxAge,
+              // Visit mode: session cookie, gone when the browser closes.
+              ...(visit ? {} : { maxAge }),
               path: "/",
               httpOnly: true,
               sameSite: "lax",
@@ -387,6 +427,9 @@ export function audienceFromParam(value: unknown): string | null {
 
 export {
   AUDIENCE_COOKIE,
+  PERSISTENT_MAX_AGE_SECONDS,
+  VISIT_COOKIE,
+  VISIT_MAX_AGE_SECONDS,
   AUDIENCE_HEADER,
   AUDIENCE_ID_HEADER,
   SOURCE_MEMORY_HEADER,
@@ -397,6 +440,7 @@ export {
 } from "./personalization/match.js";
 export type {
   ActiveAudience,
+  CookieLifetime,
   SourceMemory,
   SourceTouch,
 } from "./personalization/match.js";
