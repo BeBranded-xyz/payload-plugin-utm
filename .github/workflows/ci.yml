@@ -25,3 +25,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm pack
+  payload-4:
+    # Payload 4 beta: same checks against the 4.x packages (Node 24.22+).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Switch to Payload 4 beta
+        run: >-
+          pnpm add -D payload@4.0.0-beta.9 @payloadcms/ui@4.0.0-beta.9
+          @payloadcms/next@4.0.0-beta.9 @payloadcms/db-sqlite@4.0.0-beta.9
+          @payloadcms/plugin-multi-tenant@4.0.0-beta.9
+          next@16.4.6 react@19.3.1 react-dom@19.3.1
+      - run: pnpm check

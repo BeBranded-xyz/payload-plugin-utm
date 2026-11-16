@@ -1,7 +1,7 @@
 {
   "name": "payload-plugin-utm",
-  "version": "0.1.1",
-  "description": "Campaign links, live UTM generation, presets and access-controlled CSV exports for Payload CMS 3.",
+  "version": "0.2.0-beta.7",
+  "description": "Campaign links, live UTM generation, CSV exports and opt-in UTM-based content personalization for Payload CMS 3.",
   "type": "module",
   "license": "MIT",
   "author": "BeBranded",
@@ -20,7 +20,8 @@
     "utm",
     "campaign",
     "marketing",
-    "analytics"
+    "analytics",
+    "personalization"
   ],
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -40,6 +41,36 @@
       "types": "./dist/utilities.d.ts",
       "import": "./dist/utilities.js",
       "default": "./dist/utilities.js"
+    },
+    "./personalization": {
+      "types": "./dist/personalization/match.d.ts",
+      "import": "./dist/personalization/match.js",
+      "default": "./dist/personalization/match.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js",
+      "default": "./dist/next.js"
+    },
+    "./tracker": {
+      "types": "./dist/tracker.d.ts",
+      "import": "./dist/tracker.js",
+      "default": "./dist/tracker.js"
+    },
+    "./rsc": {
+      "types": "./dist/rsc.d.ts",
+      "import": "./dist/rsc.js",
+      "default": "./dist/rsc.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
+    },
+    "./preview": {
+      "types": "./dist/preview.d.ts",
+      "import": "./dist/preview.js",
+      "default": "./dist/preview.js"
     }
   },
   "files": [
@@ -54,19 +85,25 @@
     "test": "tsx --test tests/*.test.ts",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "prepack": "pnpm build",
-    "format": "prettier --write src tests examples package.json tsconfig*.json"
+    "format": "prettier --write src tests examples package.json tsconfig*.json",
+    "dev": "next dev dev",
+    "dev:importmap": "cd dev && PAYLOAD_CONFIG_PATH=./payload.config.ts payload generate:importmap"
   },
   "engines": {
     "node": ">=22"
   },
   "packageManager": "pnpm@10.28.0",
   "peerDependencies": {
-    "@payloadcms/ui": "^3.92.0",
-    "payload": "^3.92.0",
+    "@payloadcms/next": "^3.92.0 || >=4.0.0-beta.9 <5",
+    "@payloadcms/ui": "^3.92.0 || >=4.0.0-beta.9 <5",
+    "next": ">=15.0.0",
+    "payload": "^3.92.0 || >=4.0.0-beta.9 <5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@payloadcms/db-sqlite": "3.92.0",
+    "@payloadcms/next": "3.92.0",
     "@payloadcms/plugin-multi-tenant": "3.92.0",
     "@payloadcms/ui": "3.92.0",
     "@types/node": "22.19.9",
@@ -79,5 +116,13 @@
     "react-dom": "19.2.6",
     "tsx": "4.23.15",
     "typescript": "5.7.3"
+  },
+  "peerDependenciesMeta": {
+    "@payloadcms/next": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    }
   }
 }
